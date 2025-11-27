@@ -294,6 +294,10 @@ export const SheetManagementPage = () => {
                     );
                     const jobId = res.data.job_id;
                     socket.emit('join_job', { job_id: jobId });
+
+                    setTimeout(() => {
+                      setBulkChecking(false);
+                    }, 60000);
                   } catch (err: any) {
                     setError(
                       err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'
