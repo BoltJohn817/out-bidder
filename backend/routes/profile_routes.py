@@ -10,8 +10,10 @@ from config import Config
 from models import (
     create_or_update_profile_from_oauth_state,
     create_profile,
+    get_application_statuses_for_sheet,
     get_profile_with_credentials,
     list_profiles,
+    upsert_application_status,
     update_profile,
 )
 from gmail_utils import search_gmail_for_company
@@ -373,12 +375,23 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
         padded = (row + [""] * 7)[:7]
         rows.append(padded)
 
+    # Load any cached application statuses for this sheet
+    spreadsheet_id = profile.get("spreadsheet_id")
+    status_map = get_application_statuses_for_sheet(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=sheet_id,
+    )
+    statuses: list[str | None] = [status_map.get(i) for i in range(len(rows))]
+
     return jsonify(
         {
             "sheet_id": sheet_id,
             "title": title,
             "headers": headers,
             "rows": rows,
+            "statuses": statuses,
         }
     ), 200
 
@@ -389,16 +402,28 @@ def check_gmail_application(current_user_id: str, profile_id: str):
     """
     Check if a position appears to be applied based on Gmail messages for the profile's account.
 
-    Body: { company_name: string, applied_date: string, applied_time?: string }
+    Body: {
+      company_name: string,
+      applied_date: string,
+      applied_time?: string,
+      sheet_id: int,
+      row_index: int,
+      position?: string,
+      job_url?: string
+    }
     Returns: { applied: bool }
     """
     data = request.get_json(silent=True) or {}
     company_name = data.get("company_name")
     applied_date = data.get("applied_date")
     applied_time = data.get("applied_time")
+    sheet_id = data.get("sheet_id")
+    row_index = data.get("row_index")
+    position = data.get("position")
+    job_url = data.get("job_url")
 
-    if not company_name or not applied_date:
-        return jsonify({"message": "company_name and applied_date are required"}), 400
+    if not company_name or not applied_date or sheet_id is None or row_index is None:
+        return jsonify({"message": "company_name, applied_date, sheet_id and row_index are required"}), 400
 
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
@@ -418,6 +443,21 @@ def check_gmail_application(current_user_id: str, profile_id: str):
         )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"message": f"Failed to query Gmail: {exc}"}), 500
+
+    # Persist status so subsequent loads can avoid recalculation
+    spreadsheet_id = profile.get("spreadsheet_id")
+    upsert_application_status(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=int(sheet_id),
+        row_index=int(row_index),
+        company_name=company_name,
+        position=position,
+        job_url=job_url,
+        applied_date=applied_date,
+        status="applied" if applied else "not_applied",
+    )
 
     return jsonify({"applied": applied}), 200
 

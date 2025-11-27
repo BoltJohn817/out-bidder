@@ -22,6 +22,10 @@ def bids_collection():
     return db["bids"]
 
 
+def applications_collection():
+    return db["applications"]
+
+
 def create_user(user_id: str, password_hash: str) -> str:
     doc = {
         "user_id": user_id,
@@ -165,5 +169,68 @@ def create_bid(
 
 def list_bids(owner_user_id: str) -> List[Dict[str, Any]]:
     return list(bids_collection().find({"owner_user_id": owner_user_id}))
+
+
+def upsert_application_status(
+    owner_user_id: str,
+    profile_id: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+    row_index: int,
+    company_name: str,
+    position: str | None,
+    job_url: str | None,
+    applied_date: str,
+    status: str,
+) -> None:
+    """
+    Store or update application status for a particular row in a sheet.
+    Status is a simple string such as 'applied' or 'not_applied'.
+    """
+    applications_collection().update_one(
+        {
+            "owner_user_id": owner_user_id,
+            "profile_id": ObjectId(profile_id),
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_id": sheet_id,
+            "row_index": row_index,
+        },
+        {
+            "$set": {
+                "company_name": company_name,
+                "position": position,
+                "job_url": job_url,
+                "applied_date": applied_date,
+                "status": status,
+                "updated_at": _now(),
+            }
+        },
+        upsert=True,
+    )
+
+
+def get_application_statuses_for_sheet(
+    owner_user_id: str,
+    profile_id: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+) -> Dict[int, str]:
+    """
+    Return a mapping of row_index -> status for a given sheet.
+    """
+    statuses: Dict[int, str] = {}
+    cursor = applications_collection().find(
+        {
+            "owner_user_id": owner_user_id,
+            "profile_id": ObjectId(profile_id),
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_id": sheet_id,
+        }
+    )
+    for doc in cursor:
+        idx = int(doc.get("row_index", -1))
+        if idx >= 0:
+            statuses[idx] = doc.get("status", "")
+    return statuses
 
 

@@ -38,6 +38,13 @@ export const SheetManagementPage = () => {
       ? headers.findIndex((h) => h.toLowerCase().includes('date'))
       : 1;
 
+  // Only show a compact set of columns in the UI table
+  const positionIndex =
+    headers.findIndex((h) => h.toLowerCase().includes('position')) !== -1
+      ? headers.findIndex((h) => h.toLowerCase().includes('position'))
+      : 0;
+  const visibleColumnIndices = [appliedDateIndex, companyIndex, positionIndex, jobUrlIndex];
+
   const handleCheckApplied = async (rowIndex: number) => {
     if (!profileId) return;
     const row = rows[rowIndex];
@@ -49,10 +56,17 @@ export const SheetManagementPage = () => {
     try {
       setCheckingIndex(rowIndex);
       setError(null);
-      const res = await api.post<{ applied: boolean }>(`/profiles/${profileId}/gmail/check-application`, {
-        company_name: company,
-        applied_date: appliedDate
-      });
+      const res = await api.post<{ applied: boolean }>(
+        `/profiles/${profileId}/gmail/check-application`,
+        {
+          company_name: company,
+          applied_date: appliedDate,
+          sheet_id: selectedSheetId,
+          row_index: rowIndex,
+          position: row[positionIndex],
+          job_url: row[jobUrlIndex]
+        }
+      );
       setAppliedStatus((prev) => ({
         ...prev,
         [rowIndex]: res.data.applied ? 'applied' : 'not_applied'
@@ -91,9 +105,21 @@ export const SheetManagementPage = () => {
         headers: string[];
         rows: string[][];
         title: string;
+        statuses?: (string | null)[];
       }>(`/profiles/${profileId}/sheets/${sheetId}`);
       setHeaders(res.data.headers);
       setRows(res.data.rows);
+      if (res.data.statuses && Array.isArray(res.data.statuses)) {
+        const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+        res.data.statuses.forEach((s, idx) => {
+          if (s === 'applied' || s === 'not_applied') {
+            statusMap[idx] = s;
+          }
+        });
+        setAppliedStatus(statusMap);
+      } else {
+        setAppliedStatus({});
+      }
     } catch (err: any) {
       setError(err?.response?.data?.message ?? 'Failed to load sheet values');
     } finally {
@@ -178,12 +204,12 @@ export const SheetManagementPage = () => {
                 <table className="min-w-full text-xs border border-slate-800">
                   <thead className="bg-slate-800">
                     <tr>
-                      {headers.map((h) => (
+                      {visibleColumnIndices.map((idx) => (
                         <th
-                          key={h}
+                          key={idx}
                           className="px-3 py-2 text-left font-semibold border-b border-slate-700"
                         >
-                          {h}
+                          {headers[idx]}
                         </th>
                       ))}
                       <th className="px-3 py-2 text-left font-semibold border-b border-slate-700">
@@ -192,18 +218,32 @@ export const SheetManagementPage = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, idx) => (
-                      <tr
-                        key={idx}
-                        className="odd:bg-slate-950 even:bg-slate-900 cursor-pointer hover:bg-slate-800/70"
-                        onClick={() => {
-                          const url = row[jobUrlIndex];
-                          if (url) {
-                            setSelectedJobUrl(url);
-                          }
-                        }}
-                      >
-                        {row.map((cell, cidx) => {
+                    {rows.map((row, idx) => {
+                      const status = appliedStatus[idx];
+                      const baseColor =
+                        status === 'applied'
+                          ? 'bg-emerald-900/40'
+                          : status === 'not_applied'
+                            ? 'bg-red-900/20'
+                            : status === 'error'
+                              ? 'bg-red-900/40'
+                              : idx % 2 === 0
+                                ? 'bg-slate-950'
+                                : 'bg-slate-900';
+
+                      return (
+                        <tr
+                          key={idx}
+                          className={`${baseColor} cursor-pointer hover:bg-slate-800/70`}
+                          onClick={() => {
+                            const url = row[jobUrlIndex];
+                            if (url) {
+                              setSelectedJobUrl(url);
+                            }
+                          }}
+                        >
+                        {visibleColumnIndices.map((cidx) => {
+                          const cell = row[cidx];
                           const isJobUrl = cidx === jobUrlIndex;
                           return (
                             <td
@@ -241,7 +281,7 @@ export const SheetManagementPage = () => {
                           )}
                         </td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                 </table>
               </div>
