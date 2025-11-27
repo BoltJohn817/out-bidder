@@ -27,7 +27,9 @@ export const SheetManagementPage = () => {
   const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
   const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
   const [bulkChecking, setBulkChecking] = useState(false);
-  const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number } | null>(null);
+  const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number; notChecked: number } | null>(
+    null
+  );
 
   const socket: Socket | null = useMemo(() => {
     // Assume backend websocket is served from same origin/port as API
@@ -120,16 +122,27 @@ export const SheetManagementPage = () => {
       }>(`/profiles/${profileId}/sheets/${sheetId}`);
       setHeaders(res.data.headers);
       setRows(res.data.rows);
+
+      const totalRows = res.data.rows.length;
       if (res.data.statuses && Array.isArray(res.data.statuses)) {
         const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+        let appliedCount = 0;
+        let notAppliedCount = 0;
         res.data.statuses.forEach((s, idx) => {
-          if (s === 'applied' || s === 'not_applied') {
-            statusMap[idx] = s;
+          if (s === 'applied') {
+            statusMap[idx] = 'applied';
+            appliedCount += 1;
+          } else if (s === 'not_applied') {
+            statusMap[idx] = 'not_applied';
+            notAppliedCount += 1;
           }
         });
         setAppliedStatus(statusMap);
+        const notChecked = Math.max(totalRows - appliedCount - notAppliedCount, 0);
+        setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
       } else {
         setAppliedStatus({});
+        setBulkSummary({ applied: 0, notApplied: 0, notChecked: totalRows });
       }
     } catch (err: any) {
       setError(err?.response?.data?.message ?? 'Failed to load sheet values');
@@ -176,9 +189,13 @@ export const SheetManagementPage = () => {
           }
         });
         setAppliedStatus(statusMap);
-      }
-      if (typeof applied_count === 'number' && typeof not_applied_count === 'number') {
-        setBulkSummary({ applied: applied_count, notApplied: not_applied_count });
+        const total = statuses.length;
+        if (typeof applied_count === 'number' && typeof not_applied_count === 'number') {
+          const notChecked = Math.max(total - applied_count - not_applied_count, 0);
+          setBulkSummary({ applied: applied_count, notApplied: not_applied_count, notChecked });
+        } else {
+          setBulkSummary(null);
+        }
       } else {
         setBulkSummary(null);
       }
@@ -293,8 +310,12 @@ export const SheetManagementPage = () => {
             </div>
             {bulkSummary && (
               <p className="text-xs text-slate-300 mb-1">
-                Confirmed applied: <span className="text-emerald-400 font-semibold">{bulkSummary.applied}</span>{' '}
-                · Not found: <span className="text-red-300 font-semibold">{bulkSummary.notApplied}</span>
+                Confirmed applied:{' '}
+                <span className="text-emerald-400 font-semibold">{bulkSummary.applied}</span>{' '}
+                · Not found:{' '}
+                <span className="text-red-300 font-semibold">{bulkSummary.notApplied}</span>{' '}
+                · Not checked yet:{' '}
+                <span className="text-slate-200 font-semibold">{bulkSummary.notChecked}</span>
               </p>
             )}
             {loading && rows.length === 0 && (
@@ -305,7 +326,7 @@ export const SheetManagementPage = () => {
             )}
 
             {rows.length > 0 && (
-              <div className="overflow-auto max-h-64">
+              <div className="overflow-auto max-h-[28rem]">
                 <table className="min-w-full text-xs border border-slate-800">
                   <thead className="bg-slate-800">
                     <tr>
@@ -350,6 +371,10 @@ export const SheetManagementPage = () => {
                         {visibleColumnIndices.map((cidx) => {
                           const cell = row[cidx];
                           const isJobUrl = cidx === jobUrlIndex;
+                          const display =
+                            isJobUrl && cell && cell.length > 40
+                              ? `${cell.slice(0, 40)}…`
+                              : cell;
                           return (
                             <td
                               key={cidx}
@@ -357,7 +382,7 @@ export const SheetManagementPage = () => {
                                 isJobUrl ? 'text-sky-300' : ''
                               }`}
                             >
-                              {cell}
+                              {display}
                             </td>
                           );
                         })}

@@ -375,12 +375,18 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
     # Only look at columns A–G (0–6)
     headers = (raw_headers + [""] * 7)[:7]
 
-    rows: list[list[str]] = []
-    for row in data_rows:
-        padded = (row + [""] * 7)[:7]
-        rows.append(padded)
+    # Determine indices for required fields
+    def _find_index(predicate, default: int) -> int:
+        try:
+            return next(i for i, h in enumerate(headers) if predicate(h.lower()))
+        except StopIteration:
+            return default
 
-    # Load any cached application statuses for this sheet
+    company_idx = _find_index(lambda h: "company" in h, 0)
+    position_idx = _find_index(lambda h: "position" in h, 2)
+    job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
+
+    # Load any cached application statuses for this sheet (keyed by original row index)
     spreadsheet_id = profile.get("spreadsheet_id")
     status_map = get_application_statuses_for_sheet(
         owner_user_id=current_user_id,
@@ -388,7 +394,21 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
         spreadsheet_id=spreadsheet_id,
         sheet_id=sheet_id,
     )
-    statuses: list[str | None] = [status_map.get(i) for i in range(len(rows))]
+
+    rows: list[list[str]] = []
+    statuses: list[str | None] = []
+    for idx, row in enumerate(data_rows):
+        padded = (row + [""] * 7)[:7]
+        company = padded[company_idx]
+        position = padded[position_idx]
+        job_url = padded[job_url_idx]
+
+        # Ignore rows that don't have required fields
+        if not company or not position or not job_url:
+            continue
+
+        rows.append(padded)
+        statuses.append(status_map.get(idx))
 
     return jsonify(
         {
@@ -560,7 +580,8 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             position = padded_row[position_idx]
             job_url = padded_row[job_url_idx]
 
-            if not company or not applied_date:
+            # Skip rows missing any required field
+            if not company or not applied_date or not position or not job_url:
                 return idx, None
 
             try:
