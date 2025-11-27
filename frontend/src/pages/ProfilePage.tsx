@@ -1,0 +1,268 @@
+import { useEffect, useState } from 'react';
+import api from '../api/client';
+
+type TechStackCategory =
+  | 'frontend'
+  | 'backend'
+  | 'fullstack'
+  | 'web'
+  | 'ai'
+  | 'data_engineering'
+  | 'devops'
+  | 'language';
+
+interface ProfileForm {
+  name: string;
+  googleEmail: string;
+  spreadsheetId: string;
+  techstack: TechStackCategory[];
+}
+
+interface Profile extends ProfileForm {
+  _id: string;
+}
+
+const AVAILABLE_TECHSTACK: { id: TechStackCategory; label: string }[] = [
+  { id: 'frontend', label: 'Frontend' },
+  { id: 'backend', label: 'Backend' },
+  { id: 'fullstack', label: 'Fullstack' },
+  { id: 'web', label: 'Web' },
+  { id: 'ai', label: 'AI' },
+  { id: 'data_engineering', label: 'Data Engineering' },
+  { id: 'devops', label: 'DevOps' },
+  { id: 'language', label: 'Programming Languages' }
+];
+
+export const ProfilePage = () => {
+  const [form, setForm] = useState<ProfileForm>({
+    name: '',
+    googleEmail: '',
+    spreadsheetId: '',
+    techstack: []
+  });
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+   const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
+
+  const loadProfiles = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await api.get<{ profiles: Profile[] }>('/profiles/');
+      setProfiles(res.data.profiles);
+    } catch (err: any) {
+      setError(err?.response?.data?.message ?? 'Failed to load profiles');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadProfiles();
+  }, []);
+
+  const toggleTech = (id: TechStackCategory) => {
+    setForm((prev) => ({
+      ...prev,
+      techstack: prev.techstack.includes(id)
+        ? prev.techstack.filter((t) => t !== id)
+        : [...prev.techstack, id]
+    }));
+  };
+
+  const handleSave = () => {
+    setError(null);
+    api
+      .post('/profiles/', {
+        name: form.name,
+        google_email: form.googleEmail,
+        spreadsheet_id: form.spreadsheetId,
+        techstack: form.techstack
+      })
+      .then(() => {
+        setForm({
+          name: '',
+          googleEmail: '',
+          spreadsheetId: '',
+          techstack: []
+        });
+        void loadProfiles();
+      })
+      .catch((err) => {
+        setError(err?.response?.data?.message ?? 'Failed to save profile');
+      });
+  };
+
+  const handleGoogleAuth = () => {
+    setError(null);
+    setGoogleAuthUrl(null);
+    api
+      .post<{ auth_url: string }>('/profiles/google/auth-url', {
+        name: form.name,
+        google_email: form.googleEmail,
+        spreadsheet_id: form.spreadsheetId,
+        techstack: form.techstack
+      })
+      .then((res) => {
+        if (res.data.auth_url) {
+          setGoogleAuthUrl(res.data.auth_url);
+        } else {
+          setError('Failed to get Google auth URL');
+        }
+      })
+      .catch((err) => {
+        setError(err?.response?.data?.message ?? 'Failed to start Google auth');
+      });
+  };
+
+  return (
+    <div>
+      <h2 className="text-2xl font-semibold mb-4">Profile Management</h2>
+      <p className="text-slate-400 text-sm mb-6">
+        Configure profiles that map a Google account and spreadsheet with a tech stack focus.
+      </p>
+
+      {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+          <div>
+            <label className="block text-sm mb-1 text-slate-300">Profile name</label>
+            <input
+              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1 text-slate-300">Google email</label>
+            <input
+              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
+              value={form.googleEmail}
+              onChange={(e) => setForm({ ...form, googleEmail: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1 text-slate-300">Spreadsheet ID</label>
+            <input
+              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
+              value={form.spreadsheetId}
+              onChange={(e) => setForm({ ...form, spreadsheetId: e.target.value })}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleGoogleAuth}
+            className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white"
+          >
+            Connect Google (Gmail + Sheets)
+          </button>
+
+          {googleAuthUrl && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-slate-300">
+                Copy this URL and open it in your browser to complete Google authentication:
+              </p>
+              <div className="flex gap-2 items-center">
+                <input
+                  readOnly
+                  value={googleAuthUrl}
+                  className="flex-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-1 text-[11px]"
+                  onFocus={(e) => e.target.select()}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(googleAuthUrl);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-100"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+          <p className="text-sm text-slate-300">Tech stack focus</p>
+          <div className="flex flex-wrap gap-2">
+            {AVAILABLE_TECHSTACK.map((item) => {
+              const active = form.techstack.includes(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => toggleTech(item.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border ${
+                    active
+                      ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                      : 'bg-slate-950 border-slate-700 text-slate-300'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            className="w-full mt-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-sm font-medium text-white"
+          >
+            Save Profile
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-8 bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-200">Existing profiles</h3>
+          <button
+            type="button"
+            onClick={() => void loadProfiles()}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            Refresh
+          </button>
+        </div>
+        {loading && <p className="text-sm text-slate-400">Loading...</p>}
+        {!loading && profiles.length === 0 && (
+          <p className="text-sm text-slate-400">No profiles yet.</p>
+        )}
+        <ul className="space-y-2">
+          {profiles.map((p) => (
+            <li
+              key={p._id}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-slate-100">{p.name}</p>
+                  <p className="text-xs text-slate-400">{p.googleEmail}</p>
+                </div>
+                <p className="text-xs text-slate-400 truncate max-w-[180px]">
+                  Sheet: {p.spreadsheetId}
+                </p>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {p.techstack.map((t) => (
+                  <span
+                    key={t}
+                    className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+};
+
+

@@ -1,0 +1,11 @@
+Flask==3.0.3
+flask-cors==5.0.0
+Flask-Bcrypt==1.0.1
+pymongo==4.10.1
+python-dotenv==1.0.1
+PyJWT==2.9.0
+google-auth==2.36.0
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.154.0
+
+
