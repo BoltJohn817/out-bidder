@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from auth_utils import require_auth
 from config import Config
 from models import (
+    clear_application_statuses_for_sheet,
     create_or_update_profile_from_oauth_state,
     create_profile,
     get_application_statuses_for_sheet,
@@ -460,5 +461,115 @@ def check_gmail_application(current_user_id: str, profile_id: str):
     )
 
     return jsonify({"applied": applied}), 200
+
+
+@profile_bp.post("/<profile_id>/sheets/<int:sheet_id>/gmail/check-all")
+@require_auth
+def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sheet_id: int):
+    """
+    Recalculate application status for all rows in a sheet.
+    Ignores any cached statuses and overwrites them.
+    Returns: { statuses: [ 'applied' | 'not_applied' | null, ... ] }
+    """
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return jsonify({"message": "Profile not found"}), 404
+
+    try:
+        creds = _build_google_credentials(profile)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    spreadsheet_id = profile.get("spreadsheet_id")
+    service = build("sheets", "v4", credentials=creds)
+
+    # Fetch sheet metadata to get title
+    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheets = meta.get("sheets", [])
+    title = None
+    for s in sheets:
+        props = s.get("properties", {})
+        if props.get("sheetId") == sheet_id:
+            title = props.get("title")
+            break
+    if not title:
+        return jsonify({"message": "Sheet not found"}), 404
+
+    # Fetch values A:G
+    range_a_g = f"'{title}'!A:G"
+    res = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=spreadsheet_id, range=range_a_g)
+        .execute()
+    )
+    values = res.get("values", [])
+    if not values:
+        return jsonify({"statuses": []}), 200
+
+    headers = (values[0] + [""] * 7)[:7]
+    data_rows = values[1:]
+
+    # Detect relevant columns by header names
+    def _find_index(predicate, default: int) -> int:
+        try:
+            return next(i for i, h in enumerate(headers) if predicate(h.lower()))
+        except StopIteration:
+            return default
+
+    company_idx = _find_index(lambda h: "company" in h, 0)
+    date_idx = _find_index(lambda h: "date" in h, 1)
+    position_idx = _find_index(lambda h: "position" in h, 2)
+    job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
+
+    # Clear old cache for this sheet so we only store fresh statuses
+    clear_application_statuses_for_sheet(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=sheet_id,
+    )
+
+    statuses: list[str | None] = []
+
+    for idx, row in enumerate(data_rows):
+        padded = (row + [""] * 7)[:7]
+        company = padded[company_idx]
+        applied_date = padded[date_idx]
+        position = padded[position_idx]
+        job_url = padded[job_url_idx]
+
+        if not company or not applied_date:
+            statuses.append(None)
+            continue
+
+        try:
+            applied = search_gmail_for_company(
+                creds=creds,
+                company=company,
+                applied_date=applied_date,
+                applied_time=None,
+            )
+        except Exception:
+            statuses.append(None)
+            continue
+
+        status_str = "applied" if applied else "not_applied"
+        statuses.append(status_str)
+
+        upsert_application_status(
+            owner_user_id=current_user_id,
+            profile_id=profile_id,
+            spreadsheet_id=spreadsheet_id,
+            sheet_id=sheet_id,
+            row_index=idx,
+            company_name=company,
+            position=position,
+            job_url=job_url,
+            applied_date=applied_date,
+            status=status_str,
+        )
+
+    return jsonify({"statuses": statuses}), 200
 
 

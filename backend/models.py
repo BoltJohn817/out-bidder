@@ -234,3 +234,23 @@ def get_application_statuses_for_sheet(
     return statuses
 
 
+def clear_application_statuses_for_sheet(
+    owner_user_id: str,
+    profile_id: str,
+    spreadsheet_id: str,
+    sheet_id: int,
+) -> None:
+    """
+    Remove all cached application statuses for a given sheet.
+    Used before a full re-check to ensure fresh results.
+    """
+    applications_collection().delete_many(
+        {
+            "owner_user_id": owner_user_id,
+            "profile_id": ObjectId(profile_id),
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_id": sheet_id,
+        }
+    )
+
+
