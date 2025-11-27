@@ -10,6 +10,7 @@ from config import Config
 from models import (
     create_or_update_profile_from_oauth_state,
     create_profile,
+    get_profile_with_credentials,
     list_profiles,
     update_profile,
 )
@@ -244,5 +245,140 @@ def google_callback():
     frontend_base = current_app.config.get("FRONTEND_BASE_URL", "http://localhost:5173")
     frontend_url = frontend_base.rstrip("/") + "/profile"
     return redirect(f"{frontend_url}?google_connected=1&profile_id={profile_id}")
+
+
+def _build_sheets_credentials(profile: dict) -> Credentials:
+    creds_info = profile.get("google_credentials")
+    if not creds_info:
+        raise ValueError("Profile does not have Google credentials")
+
+    creds = Credentials(
+        token=creds_info.get("token"),
+        refresh_token=creds_info.get("refresh_token"),
+        token_uri=creds_info.get("token_uri"),
+        client_id=creds_info.get("client_id"),
+        client_secret=creds_info.get("client_secret"),
+        scopes=creds_info.get("scopes"),
+    )
+
+    if creds.expired and creds.refresh_token:
+        creds.refresh(GoogleRequest())
+        # Persist refreshed token
+        profiles_collection = get_profile_with_credentials.__globals__["profiles_collection"]  # type: ignore[index]
+        profiles_collection().update_one(
+            {"_id": profile["_id"]},
+            {
+                "$set": {
+                    "google_credentials.token": creds.token,
+                }
+            },
+        )
+
+    return creds
+
+
+@profile_bp.get("/<profile_id>/sheets")
+@require_auth
+def list_sheets(current_user_id: str, profile_id: str):
+    """List sheets (tabs) available in the profile's spreadsheet."""
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return jsonify({"message": "Profile not found"}), 404
+
+    try:
+        creds = _build_sheets_credentials(profile)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    spreadsheet_id = profile.get("spreadsheet_id")
+    service = build("sheets", "v4", credentials=creds)
+    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheets = meta.get("sheets", [])
+
+    result = []
+    for s in sheets:
+        props = s.get("properties", {})
+        result.append(
+            {
+                "sheet_id": props.get("sheetId"),
+                "title": props.get("title"),
+                "index": props.get("index"),
+            }
+        )
+
+    return jsonify({"sheets": result}), 200
+
+
+@profile_bp.get("/<profile_id>/sheets/<int:sheet_id>")
+@require_auth
+def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
+    """Return values from columns A-G of the given sheet."""
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return jsonify({"message": "Profile not found"}), 404
+
+    try:
+        creds = _build_sheets_credentials(profile)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    spreadsheet_id = profile.get("spreadsheet_id")
+    service = build("sheets", "v4", credentials=creds)
+    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheets = meta.get("sheets", [])
+
+    title = None
+    for s in sheets:
+        props = s.get("properties", {})
+        if props.get("sheetId") == sheet_id:
+            title = props.get("title")
+            break
+
+    if not title:
+        return jsonify({"message": "Sheet not found"}), 404
+
+    range_a_g = f"'{title}'!A:G"
+    res = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=spreadsheet_id, range=range_a_g)
+        .execute()
+    )
+    values = res.get("values", [])
+
+    # If there are no rows, just return empty headers/rows
+    if not values:
+        return (
+            jsonify(
+                {
+                    "sheet_id": sheet_id,
+                    "title": title,
+                    "headers": [],
+                    "rows": [],
+                }
+            ),
+            200,
+        )
+
+    # Treat the first row as headers, remaining rows as data.
+    raw_headers = values[0]
+    data_rows = values[1:]
+
+    # Only look at columns A–G (0–6)
+    headers = (raw_headers + [""] * 7)[:7]
+
+    rows: list[list[str]] = []
+    for row in data_rows:
+        padded = (row + [""] * 7)[:7]
+        rows.append(padded)
+
+    return jsonify(
+        {
+            "sheet_id": sheet_id,
+            "title": title,
+            "headers": headers,
+            "rows": rows,
+        }
+    ), 200
 
 

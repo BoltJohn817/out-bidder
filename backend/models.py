@@ -62,6 +62,13 @@ def list_profiles(owner_user_id: str) -> List[Dict[str, Any]]:
     return list(profiles_collection().find({"owner_user_id": owner_user_id}))
 
 
+def get_profile_with_credentials(owner_user_id: str, profile_id: str) -> Dict[str, Any] | None:
+    """Return a single profile document including google_credentials if present."""
+    return profiles_collection().find_one(
+        {"_id": ObjectId(profile_id), "owner_user_id": owner_user_id}
+    )
+
+
 def update_profile(
     owner_user_id: str,
     profile_id: str,

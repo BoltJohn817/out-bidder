@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 
 type TechStackCategory =
@@ -42,6 +43,7 @@ const AVAILABLE_TECHSTACK: { id: TechStackCategory; label: string }[] = [
 ];
 
 export const ProfilePage = () => {
+  const navigate = useNavigate();
   const [form, setForm] = useState<ProfileForm>({
     name: '',
     googleEmail: '',
@@ -279,24 +281,29 @@ export const ProfilePage = () => {
             return (
               <li
                 key={p._id}
-                onClick={() => {
-                  setSelectedProfileId(p._id);
-                  setForm({
-                    name: p.name,
-                    googleEmail: p.googleEmail,
-                    spreadsheetId: p.spreadsheetId,
-                    techstack: p.techstack
-                  });
-                  setGoogleAuthUrl(null);
-                }}
                 className={`bg-slate-950 border rounded-lg px-3 py-2 text-sm cursor-pointer ${
                   isSelected ? 'border-sky-500' : 'border-slate-800'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium text-slate-100">{p.name}</p>
-                    <p className="text-xs text-slate-400">{p.googleEmail}</p>
+                    <button
+                      type="button"
+                      className="font-medium text-slate-100 text-left hover:text-sky-300"
+                      onClick={() => {
+                        setSelectedProfileId(p._id);
+                        setForm({
+                          name: p.name,
+                          googleEmail: p.googleEmail,
+                          spreadsheetId: p.spreadsheetId,
+                          techstack: p.techstack
+                        });
+                        setGoogleAuthUrl(null);
+                      }}
+                    >
+                      {p.name}
+                    </button>
+                    <p className="text-xs text-slate-400 mt-0.5">{p.googleEmail}</p>
                   </div>
                   <p className="text-xs text-slate-400 truncate max-w-[180px]">
                     Sheet: {p.spreadsheetId}
@@ -311,6 +318,15 @@ export const ProfilePage = () => {
                       {t}
                     </span>
                   ))}
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/profiles/${p._id}/sheets`)}
+                    className="text-xs text-sky-400 hover:text-sky-300"
+                  >
+                    Manage sheets
+                  </button>
                 </div>
               </li>
             );

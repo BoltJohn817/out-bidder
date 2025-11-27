@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthPage } from './pages/AuthPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { BidManagementPage } from './pages/BidManagementPage';
+import { SheetManagementPage } from './pages/SheetManagementPage';
 import { useAuth } from './hooks/useAuth';
 
 const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
@@ -23,6 +24,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profiles/:profileId/sheets"
+            element={
+              <ProtectedRoute>
+                <SheetManagementPage />
               </ProtectedRoute>
             }
           />
