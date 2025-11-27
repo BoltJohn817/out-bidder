@@ -180,7 +180,7 @@ export const SheetManagementPage = () => {
     });
 
     socket.on('application_check_complete', (payload: any) => {
-      const { statuses, applied_count, not_applied_count } = payload;
+      const { statuses } = payload;
       if (Array.isArray(statuses)) {
         const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
         statuses.forEach((s: string | null, idx: number) => {
@@ -189,13 +189,12 @@ export const SheetManagementPage = () => {
           }
         });
         setAppliedStatus(statusMap);
-        const total = statuses.length;
-        if (typeof applied_count === 'number' && typeof not_applied_count === 'number') {
-          const notChecked = Math.max(total - applied_count - not_applied_count, 0);
-          setBulkSummary({ applied: applied_count, notApplied: not_applied_count, notChecked });
-        } else {
-          setBulkSummary(null);
-        }
+
+        // Recompute summary based only on rows we actually render
+        const appliedCount = Object.values(statusMap).filter((s) => s === 'applied').length;
+        const notAppliedCount = Object.values(statusMap).filter((s) => s === 'not_applied').length;
+        const notChecked = Math.max(rows.length - appliedCount - notAppliedCount, 0);
+        setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
       } else {
         setBulkSummary(null);
       }
