@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { io, Socket } from 'socket.io-client';
 import api from '../api/client';
 
 interface RouteParams {
@@ -26,6 +27,14 @@ export const SheetManagementPage = () => {
   const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
   const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
   const [bulkChecking, setBulkChecking] = useState(false);
+
+  const socket: Socket | null = useMemo(() => {
+    // Assume backend websocket is served from same origin/port as API
+    return io(import.meta.env.VITE_API_BASE_URL?.replace('/api', '') ?? 'http://localhost:5001', {
+      autoConnect: false,
+      transports: ['websocket']
+    });
+  }, []);
   const jobUrlIndex =
     headers.findIndex((h) => h.toLowerCase().trim() === 'job url') !== -1
       ? headers.findIndex((h) => h.toLowerCase().trim() === 'job url')
@@ -138,6 +147,49 @@ export const SheetManagementPage = () => {
     }
   }, [selectedSheetId]);
 
+  useEffect(() => {
+    if (!socket) return;
+    socket.connect();
+
+    socket.on('connect_error', () => {
+      // Silently ignore for now; page will still work without live updates
+    });
+
+    socket.on('application_check_progress', (payload: any) => {
+      const { job_id, row_index, status } = payload;
+      setAppliedStatus((prev) => {
+        if (status === 'applied' || status === 'not_applied') {
+          return { ...prev, [row_index]: status };
+        }
+        return prev;
+      });
+    });
+
+    socket.on('application_check_complete', (payload: any) => {
+      const { statuses } = payload;
+      if (Array.isArray(statuses)) {
+        const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+        statuses.forEach((s: string | null, idx: number) => {
+          if (s === 'applied' || s === 'not_applied') {
+            statusMap[idx] = s;
+          }
+        });
+        setAppliedStatus(statusMap);
+      }
+      setBulkChecking(false);
+    });
+
+    socket.on('application_check_error', (payload: any) => {
+      setError(payload?.message ?? 'Background check failed');
+      setBulkChecking(false);
+    });
+
+    return () => {
+      socket.disconnect();
+      socket.removeAllListeners();
+    };
+  }, [socket]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -200,25 +252,19 @@ export const SheetManagementPage = () => {
               <button
                 type="button"
                 onClick={async () => {
-                  if (!profileId || selectedSheetId === null) return;
+                  if (!profileId || selectedSheetId === null || !socket) return;
                   try {
                     setBulkChecking(true);
                     setError(null);
-                    const res = await api.post<{ statuses: (string | null)[] }>(
+                    const res = await api.post<{ job_id: string }>(
                       `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
                     );
-                    const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
-                    res.statuses.forEach((s, idx) => {
-                      if (s === 'applied' || s === 'not_applied') {
-                        statusMap[idx] = s;
-                      }
-                    });
-                    setAppliedStatus(statusMap);
+                    const jobId = res.data.job_id;
+                    socket.emit('join_job', { job_id: jobId });
                   } catch (err: any) {
                     setError(
-                      err?.response?.data?.message ?? 'Failed to check Gmail for all positions'
+                      err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'
                     );
-                  } finally {
                     setBulkChecking(false);
                   }
                 }}

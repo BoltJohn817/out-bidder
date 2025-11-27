@@ -18,6 +18,10 @@ from models import (
     update_profile,
 )
 from gmail_utils import search_gmail_for_company
+from extensions import socketio
+import uuid
+from flask_socketio import join_room
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 profile_bp = Blueprint("profiles", __name__)
 
@@ -475,101 +479,147 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     if not profile:
         return jsonify({"message": "Profile not found"}), 404
 
-    try:
-        creds = _build_google_credentials(profile)
-    except ValueError as exc:
-        return jsonify({"message": str(exc)}), 400
+    job_id = str(uuid.uuid4())
 
-    spreadsheet_id = profile.get("spreadsheet_id")
-    service = build("sheets", "v4", credentials=creds)
-
-    # Fetch sheet metadata to get title
-    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    sheets = meta.get("sheets", [])
-    title = None
-    for s in sheets:
-        props = s.get("properties", {})
-        if props.get("sheetId") == sheet_id:
-            title = props.get("title")
-            break
-    if not title:
-        return jsonify({"message": "Sheet not found"}), 404
-
-    # Fetch values A:G
-    range_a_g = f"'{title}'!A:G"
-    res = (
-        service.spreadsheets()
-        .values()
-        .get(spreadsheetId=spreadsheet_id, range=range_a_g)
-        .execute()
-    )
-    values = res.get("values", [])
-    if not values:
-        return jsonify({"statuses": []}), 200
-
-    headers = (values[0] + [""] * 7)[:7]
-    data_rows = values[1:]
-
-    # Detect relevant columns by header names
-    def _find_index(predicate, default: int) -> int:
+    def _worker():
         try:
-            return next(i for i, h in enumerate(headers) if predicate(h.lower()))
-        except StopIteration:
-            return default
-
-    company_idx = _find_index(lambda h: "company" in h, 0)
-    date_idx = _find_index(lambda h: "date" in h, 1)
-    position_idx = _find_index(lambda h: "position" in h, 2)
-    job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
-
-    # Clear old cache for this sheet so we only store fresh statuses
-    clear_application_statuses_for_sheet(
-        owner_user_id=current_user_id,
-        profile_id=profile_id,
-        spreadsheet_id=spreadsheet_id,
-        sheet_id=sheet_id,
-    )
-
-    statuses: list[str | None] = []
-
-    for idx, row in enumerate(data_rows):
-        padded = (row + [""] * 7)[:7]
-        company = padded[company_idx]
-        applied_date = padded[date_idx]
-        position = padded[position_idx]
-        job_url = padded[job_url_idx]
-
-        if not company or not applied_date:
-            statuses.append(None)
-            continue
-
-        try:
-            applied = search_gmail_for_company(
-                creds=creds,
-                company=company,
-                applied_date=applied_date,
-                applied_time=None,
+            creds = _build_google_credentials(profile)
+        except ValueError as exc:
+            socketio.emit(
+                "application_check_error",
+                {"job_id": job_id, "message": str(exc)},
+                room=job_id,
             )
-        except Exception:
-            statuses.append(None)
-            continue
+            return
 
-        status_str = "applied" if applied else "not_applied"
-        statuses.append(status_str)
+        spreadsheet_id = profile.get("spreadsheet_id")
+        service = build("sheets", "v4", credentials=creds)
 
-        upsert_application_status(
+        # Fetch sheet metadata to get title
+        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        sheets = meta.get("sheets", [])
+        title = None
+        for s in sheets:
+            props = s.get("properties", {})
+            if props.get("sheetId") == sheet_id:
+                title = props.get("title")
+                break
+        if not title:
+            socketio.emit(
+                "application_check_error",
+                {"job_id": job_id, "message": "Sheet not found"},
+                room=job_id,
+            )
+            return
+
+        # Fetch values A:G
+        range_a_g = f"'{title}'!A:G"
+        res = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=range_a_g)
+            .execute()
+        )
+        values = res.get("values", [])
+        if not values:
+            socketio.emit(
+                "application_check_complete",
+                {"job_id": job_id, "statuses": []},
+                room=job_id,
+            )
+            return
+
+        headers = (values[0] + [""] * 7)[:7]
+        data_rows = values[1:]
+
+        # Detect relevant columns by header names
+        def _find_index(predicate, default: int) -> int:
+            try:
+                return next(i for i, h in enumerate(headers) if predicate(h.lower()))
+            except StopIteration:
+                return default
+
+        company_idx = _find_index(lambda h: "company" in h, 0)
+        date_idx = _find_index(lambda h: "date" in h, 1)
+        position_idx = _find_index(lambda h: "position" in h, 2)
+        job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
+
+        # Clear old cache for this sheet so we only store fresh statuses
+        clear_application_statuses_for_sheet(
             owner_user_id=current_user_id,
             profile_id=profile_id,
             spreadsheet_id=spreadsheet_id,
             sheet_id=sheet_id,
-            row_index=idx,
-            company_name=company,
-            position=position,
-            job_url=job_url,
-            applied_date=applied_date,
-            status=status_str,
         )
 
-    return jsonify({"statuses": statuses}), 200
+        statuses: list[str | None] = [None] * len(data_rows)
+
+        def process_row(idx: int, padded_row: list[str]) -> tuple[int, str | None]:
+            company = padded_row[company_idx]
+            applied_date = padded_row[date_idx]
+            position = padded_row[position_idx]
+            job_url = padded_row[job_url_idx]
+
+            if not company or not applied_date:
+                return idx, None
+
+            try:
+                applied = search_gmail_for_company(
+                    creds=creds,
+                    company=company,
+                    applied_date=applied_date,
+                    applied_time=None,
+                )
+            except Exception:
+                return idx, None
+
+            status_str = "applied" if applied else "not_applied"
+
+            upsert_application_status(
+                owner_user_id=current_user_id,
+                profile_id=profile_id,
+                spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_id,
+                row_index=idx,
+                company_name=company,
+                position=position,
+                job_url=job_url,
+                applied_date=applied_date,
+                status=status_str,
+            )
+            return idx, status_str
+
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_map = {
+                executor.submit(process_row, idx, (row + [""] * 7)[:7]): idx
+                for idx, row in enumerate(data_rows)
+            }
+
+            for future in as_completed(future_map):
+                idx, status = future.result()
+                statuses[idx] = status
+                socketio.emit(
+                    "application_check_progress",
+                    {"job_id": job_id, "row_index": idx, "status": status},
+                    room=job_id,
+                )
+
+        socketio.emit(
+            "application_check_complete",
+            {"job_id": job_id, "statuses": statuses},
+            room=job_id,
+        )
+
+    socketio.start_background_task(_worker)
+
+    return jsonify({"job_id": job_id}), 202
+
+
+@socketio.on("join_job")
+def handle_join_job(data):
+    job_id = data.get("job_id")
+    if not job_id:
+        return
+    join_room(job_id)
 
 
