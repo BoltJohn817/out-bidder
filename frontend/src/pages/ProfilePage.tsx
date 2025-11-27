@@ -71,29 +71,6 @@ export const ProfilePage = () => {
     }));
   };
 
-  const handleSave = () => {
-    setError(null);
-    api
-      .post('/profiles/', {
-        name: form.name,
-        google_email: form.googleEmail,
-        spreadsheet_id: form.spreadsheetId,
-        techstack: form.techstack
-      })
-      .then(() => {
-        setForm({
-          name: '',
-          googleEmail: '',
-          spreadsheetId: '',
-          techstack: []
-        });
-        void loadProfiles();
-      })
-      .catch((err) => {
-        setError(err?.response?.data?.message ?? 'Failed to save profile');
-      });
-  };
-
   const handleGoogleAuth = () => {
     setError(null);
     setGoogleAuthUrl(null);
@@ -125,7 +102,7 @@ export const ProfilePage = () => {
 
       {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 md:grid-cols-1">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
           <div>
             <label className="block text-sm mb-1 text-slate-300">Profile name</label>
@@ -150,6 +127,29 @@ export const ProfilePage = () => {
               value={form.spreadsheetId}
               onChange={(e) => setForm({ ...form, spreadsheetId: e.target.value })}
             />
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+            <p className="text-sm text-slate-300">Tech stack focus</p>
+            <div className="flex flex-wrap gap-2">
+              {AVAILABLE_TECHSTACK.map((item) => {
+                const active = form.techstack.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => toggleTech(item.id)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border ${
+                      active
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                        : 'bg-slate-950 border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+
           </div>
           <button
             type="button"
@@ -185,36 +185,6 @@ export const ProfilePage = () => {
           )}
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
-          <p className="text-sm text-slate-300">Tech stack focus</p>
-          <div className="flex flex-wrap gap-2">
-            {AVAILABLE_TECHSTACK.map((item) => {
-              const active = form.techstack.includes(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => toggleTech(item.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium border ${
-                    active
-                      ? 'bg-sky-500/20 border-sky-400 text-sky-200'
-                      : 'bg-slate-950 border-slate-700 text-slate-300'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            onClick={handleSave}
-            className="w-full mt-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-sm font-medium text-white"
-          >
-            Save Profile
-          </button>
-        </div>
       </div>
 
       <div className="mt-8 bg-slate-900 border border-slate-800 rounded-xl p-4">
