@@ -25,6 +25,7 @@ export const SheetManagementPage = () => {
   const [selectedJobUrl, setSelectedJobUrl] = useState<string | null>(null);
   const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
   const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
+  const [bulkChecking, setBulkChecking] = useState(false);
   const jobUrlIndex =
     headers.findIndex((h) => h.toLowerCase().trim() === 'job url') !== -1
       ? headers.findIndex((h) => h.toLowerCase().trim() === 'job url')
@@ -192,6 +193,41 @@ export const SheetManagementPage = () => {
             <h3 className="text-sm font-semibold text-slate-200 mb-3">
               Sheet content (columns A–G)
             </h3>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-slate-400">
+                Date, Company, Position, Job Url and application status.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!profileId || selectedSheetId === null) return;
+                  try {
+                    setBulkChecking(true);
+                    setError(null);
+                    const res = await api.post<{ statuses: (string | null)[] }>(
+                      `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
+                    );
+                    const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+                    res.statuses.forEach((s, idx) => {
+                      if (s === 'applied' || s === 'not_applied') {
+                        statusMap[idx] = s;
+                      }
+                    });
+                    setAppliedStatus(statusMap);
+                  } catch (err: any) {
+                    setError(
+                      err?.response?.data?.message ?? 'Failed to check Gmail for all positions'
+                    );
+                  } finally {
+                    setBulkChecking(false);
+                  }
+                }}
+                className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
+                disabled={bulkChecking || rows.length === 0}
+              >
+                {bulkChecking ? 'Checking all…' : 'Check all applications'}
+              </button>
+            </div>
             {loading && rows.length === 0 && (
               <p className="text-sm text-slate-400">Loading...</p>
             )}
