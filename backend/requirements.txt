@@ -12,3 +12,4 @@ flask-socketio==5.3.6
 gunicorn==23.0.0
 gevent>=25.9.1
 gevent-websocket==0.10.1
+psutil==6.1.1

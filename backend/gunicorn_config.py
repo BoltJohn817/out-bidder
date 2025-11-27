@@ -34,3 +34,15 @@ tmp_upload_dir = None
 # keyfile = None
 # certfile = None
 
+import os
+import psutil
+
+def post_worker_init(worker):
+    process = psutil.Process(os.getpid())
+    rss = process.memory_info().rss / (1024 * 1024)
+    worker.log.info(f"[INIT] Worker PID={os.getpid()} Memory={rss:.2f} MB")
+
+def worker_int(worker):
+    process = psutil.Process(os.getpid())
+    rss = process.memory_info().rss / (1024 * 1024)
+    worker.log.info(f"[INT] Worker PID={os.getpid()} Memory={rss:.2f} MB")
