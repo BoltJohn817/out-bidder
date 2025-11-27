@@ -27,6 +27,7 @@ export const SheetManagementPage = () => {
   const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
   const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
   const [bulkChecking, setBulkChecking] = useState(false);
+  const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number } | null>(null);
 
   const socket: Socket | null = useMemo(() => {
     // Assume backend websocket is served from same origin/port as API
@@ -166,7 +167,7 @@ export const SheetManagementPage = () => {
     });
 
     socket.on('application_check_complete', (payload: any) => {
-      const { statuses } = payload;
+      const { statuses, applied_count, not_applied_count } = payload;
       if (Array.isArray(statuses)) {
         const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
         statuses.forEach((s: string | null, idx: number) => {
@@ -176,12 +177,18 @@ export const SheetManagementPage = () => {
         });
         setAppliedStatus(statusMap);
       }
+      if (typeof applied_count === 'number' && typeof not_applied_count === 'number') {
+        setBulkSummary({ applied: applied_count, notApplied: not_applied_count });
+      } else {
+        setBulkSummary(null);
+      }
       setBulkChecking(false);
     });
 
     socket.on('application_check_error', (payload: any) => {
       setError(payload?.message ?? 'Background check failed');
       setBulkChecking(false);
+      setBulkSummary(null);
     });
 
     return () => {
@@ -227,7 +234,15 @@ export const SheetManagementPage = () => {
             {sheets.map((s) => (
               <li
                 key={s.sheet_id}
-                onClick={() => setSelectedSheetId(s.sheet_id)}
+                onClick={() => {
+                  // When switching sheets, clear in-memory statuses and summary
+                  setSelectedSheetId(s.sheet_id);
+                  setAppliedStatus({});
+                  setBulkSummary(null);
+                  setCheckingIndex(null);
+                  setSelectedJobUrl(null);
+                  setError(null);
+                }}
                 className={`px-3 py-2 rounded-lg cursor-pointer ${
                   selectedSheetId === s.sheet_id
                     ? 'bg-sky-500/20 border border-sky-500 text-sky-100'
@@ -256,6 +271,8 @@ export const SheetManagementPage = () => {
                   try {
                     setBulkChecking(true);
                     setError(null);
+                    setBulkSummary(null);
+                    setAppliedStatus({});
                     const res = await api.post<{ job_id: string }>(
                       `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
                     );
@@ -274,6 +291,12 @@ export const SheetManagementPage = () => {
                 {bulkChecking ? 'Checking all…' : 'Check all applications'}
               </button>
             </div>
+            {bulkSummary && (
+              <p className="text-xs text-slate-300 mb-1">
+                Confirmed applied: <span className="text-emerald-400 font-semibold">{bulkSummary.applied}</span>{' '}
+                · Not found: <span className="text-red-300 font-semibold">{bulkSummary.notApplied}</span>
+              </p>
+            )}
             {loading && rows.length === 0 && (
               <p className="text-sm text-slate-400">Loading...</p>
             )}

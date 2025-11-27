@@ -479,6 +479,15 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     if not profile:
         return jsonify({"message": "Profile not found"}), 404
 
+    spreadsheet_id = profile.get("spreadsheet_id")
+    # Preprocessing: synchronously clear all previous statuses for this sheet
+    clear_application_statuses_for_sheet(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+        spreadsheet_id=spreadsheet_id,
+        sheet_id=sheet_id,
+    )
+
     job_id = str(uuid.uuid4())
 
     def _worker():
@@ -492,7 +501,6 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             )
             return
 
-        spreadsheet_id = profile.get("spreadsheet_id")
         service = build("sheets", "v4", credentials=creds)
 
         # Fetch sheet metadata to get title
@@ -543,14 +551,6 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         date_idx = _find_index(lambda h: "date" in h, 1)
         position_idx = _find_index(lambda h: "position" in h, 2)
         job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
-
-        # Clear old cache for this sheet so we only store fresh statuses
-        clear_application_statuses_for_sheet(
-            owner_user_id=current_user_id,
-            profile_id=profile_id,
-            spreadsheet_id=spreadsheet_id,
-            sheet_id=sheet_id,
-        )
 
         statuses: list[str | None] = [None] * len(data_rows)
 
@@ -604,9 +604,17 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
                     room=job_id,
                 )
 
+        applied_count = sum(1 for s in statuses if s == "applied")
+        not_applied_count = sum(1 for s in statuses if s == "not_applied")
+
         socketio.emit(
             "application_check_complete",
-            {"job_id": job_id, "statuses": statuses},
+            {
+                "job_id": job_id,
+                "statuses": statuses,
+                "applied_count": applied_count,
+                "not_applied_count": not_applied_count,
+            },
             room=job_id,
         )
 
