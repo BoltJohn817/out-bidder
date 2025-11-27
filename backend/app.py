@@ -16,7 +16,8 @@ def create_app() -> Flask:
     bcrypt.init_app(app)
     jwt_manager.init_app(app)
     CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
-    socketio.init_app(app, cors_allowed_origins="*")
+    # SocketIO is already initialized with proper config in extensions.py
+    socketio.init_app(app)
 
     # Make Mongo client available via app
     app.mongo_client = mongo_client  # type: ignore[attr-defined]

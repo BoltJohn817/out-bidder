@@ -24,8 +24,8 @@ else:
 worker_class = "gevent"  # Required for Flask-SocketIO
 # Reduced worker_connections for memory efficiency on Railway
 worker_connections = int(os.getenv("GUNICORN_WORKER_CONNECTIONS", "100"))
-timeout = 30
-keepalive = 2
+timeout = 60  # Increased for WebSocket long-polling
+keepalive = 5  # Increased for WebSocket connections
 # Restart workers periodically to prevent memory leaks
 max_requests = int(os.getenv("GUNICORN_MAX_REQUESTS", "1000"))
 max_requests_jitter = int(os.getenv("GUNICORN_MAX_REQUESTS_JITTER", "50"))

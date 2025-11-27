@@ -7,7 +7,17 @@ import jwt
 from config import Config
 
 bcrypt = Bcrypt()
-socketio = SocketIO(async_mode="gevent", cors_allowed_origins="*")
+# Configure SocketIO for Railway/production deployment
+# Allow both polling and websocket transports for better compatibility
+socketio = SocketIO(
+    async_mode="gevent",
+    cors_allowed_origins="*",
+    allow_upgrades=True,
+    transports=["polling", "websocket"],
+    ping_timeout=60,
+    ping_interval=25,
+    max_http_buffer_size=1e6,
+)
 
 
 class JWTManager:
