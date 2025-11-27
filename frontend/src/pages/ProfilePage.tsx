@@ -43,7 +43,8 @@ export const ProfilePage = () => {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-   const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
+  const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 
   const loadProfiles = async () => {
     try {
@@ -71,6 +72,40 @@ export const ProfilePage = () => {
     }));
   };
 
+  const resetForm = () => {
+    setSelectedProfileId(null);
+    setForm({
+      name: '',
+      googleEmail: '',
+      spreadsheetId: '',
+      techstack: []
+    });
+    setGoogleAuthUrl(null);
+  };
+
+  const handleSaveProfile = () => {
+    setError(null);
+    const payload = {
+      name: form.name,
+      google_email: form.googleEmail,
+      spreadsheet_id: form.spreadsheetId,
+      techstack: form.techstack
+    };
+
+    const request = selectedProfileId
+      ? api.put(`/profiles/${selectedProfileId}`, payload)
+      : api.post('/profiles/', payload);
+
+    request
+      .then(() => {
+        resetForm();
+        void loadProfiles();
+      })
+      .catch((err) => {
+        setError(err?.response?.data?.message ?? 'Failed to save profile');
+      });
+  };
+
   const handleGoogleAuth = () => {
     setError(null);
     setGoogleAuthUrl(null);
@@ -79,7 +114,8 @@ export const ProfilePage = () => {
         name: form.name,
         google_email: form.googleEmail,
         spreadsheet_id: form.spreadsheetId,
-        techstack: form.techstack
+        techstack: form.techstack,
+        profile_id: selectedProfileId ?? undefined
       })
       .then((res) => {
         if (res.data.auth_url) {
@@ -104,13 +140,24 @@ export const ProfilePage = () => {
 
       <div className="grid gap-6 md:grid-cols-1">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
-          <div>
-            <label className="block text-sm mb-1 text-slate-300">Profile name</label>
-            <input
-              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
+          <div className="flex items-center justify-between">
+            <div className="flex-1 mr-2">
+              <label className="block text-sm mb-1 text-slate-300">Profile name</label>
+              <input
+                className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            {selectedProfileId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="text-xs text-slate-300 hover:text-slate-100 mt-6"
+              >
+                New profile
+              </button>
+            )}
           </div>
           <div>
             <label className="block text-sm mb-1 text-slate-300">Google email</label>
@@ -151,13 +198,22 @@ export const ProfilePage = () => {
             </div>
 
           </div>
-          <button
-            type="button"
-            onClick={handleGoogleAuth}
-            className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white"
-          >
-            Connect Google (Gmail + Sheets)
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button
+              type="button"
+              onClick={handleSaveProfile}
+              className="flex-1 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-sm font-medium text-white"
+            >
+              {selectedProfileId ? 'Update Profile' : 'Create Profile'}
+            </button>
+            <button
+              type="button"
+              onClick={handleGoogleAuth}
+              className="flex-1 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white"
+            >
+              {selectedProfileId ? 'Update Google access' : 'Connect Google (Gmail + Sheets)'}
+            </button>
+          </div>
 
           {googleAuthUrl && (
             <div className="mt-3 space-y-2">
@@ -203,32 +259,47 @@ export const ProfilePage = () => {
           <p className="text-sm text-slate-400">No profiles yet.</p>
         )}
         <ul className="space-y-2">
-          {profiles.map((p) => (
-            <li
-              key={p._id}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-slate-100">{p.name}</p>
-                  <p className="text-xs text-slate-400">{p.googleEmail}</p>
+          {profiles.map((p) => {
+            const isSelected = selectedProfileId === p._id;
+            return (
+              <li
+                key={p._id}
+                onClick={() => {
+                  setSelectedProfileId(p._id);
+                  setForm({
+                    name: p.name,
+                    googleEmail: p.google_email,
+                    spreadsheetId: p.spreadsheet_id,
+                    techstack: p.techstack
+                  });
+                  setGoogleAuthUrl(null);
+                }}
+                className={`bg-slate-950 border rounded-lg px-3 py-2 text-sm cursor-pointer ${
+                  isSelected ? 'border-sky-500' : 'border-slate-800'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-slate-100">{p.name}</p>
+                    <p className="text-xs text-slate-400">{p.googleEmail}</p>
+                  </div>
+                  <p className="text-xs text-slate-400 truncate max-w-[180px]">
+                    Sheet: {p.spreadsheetId}
+                  </p>
                 </div>
-                <p className="text-xs text-slate-400 truncate max-w-[180px]">
-                  Sheet: {p.spreadsheetId}
-                </p>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {p.techstack.map((t) => (
-                  <span
-                    key={t}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200"
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </li>
-          ))}
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {p.techstack.map((t) => (
+                    <span
+                      key={t}
+                      className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

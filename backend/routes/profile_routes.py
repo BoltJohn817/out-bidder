@@ -7,7 +7,12 @@ from googleapiclient.discovery import build
 
 from auth_utils import require_auth
 from config import Config
-from models import create_profile, create_profile_from_oauth_state, list_profiles
+from models import (
+    create_or_update_profile_from_oauth_state,
+    create_profile,
+    list_profiles,
+    update_profile,
+)
 
 profile_bp = Blueprint("profiles", __name__)
 
@@ -57,6 +62,36 @@ def create_profile_route(current_user_id: str):
     return jsonify({"profile_id": profile_id}), 201
 
 
+@profile_bp.put("/<profile_id>")
+@require_auth
+def update_profile_route(current_user_id: str, profile_id: str):
+    """
+    Update an existing profile's basic fields (not Google credentials).
+    Body can include: name, google_email, spreadsheet_id, techstack[]
+    """
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    google_email = data.get("google_email")
+    spreadsheet_id = data.get("spreadsheet_id")
+    techstack = data.get("techstack")
+
+    if techstack is not None and not isinstance(techstack, list):
+        return jsonify({"message": "techstack must be a list"}), 400
+
+    updated = update_profile(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+        name=name,
+        google_email=google_email,
+        spreadsheet_id=spreadsheet_id,
+        techstack=techstack,
+    )
+    if not updated:
+        return jsonify({"message": "Profile not found"}), 404
+
+    return jsonify({"profile_id": profile_id}), 200
+
+
 def _build_oauth_flow(redirect_uri: str) -> Flow:
     client_config = {
         "web": {
@@ -96,6 +131,9 @@ def google_auth_url(current_user_id: str):
             400,
         )
 
+    # Optional: profile_id when refreshing Google credentials for an existing profile
+    profile_id = data.get("profile_id")
+
     # Embed the pending profile data + user id into the OAuth state token
     state_payload = {
         "owner_user_id": current_user_id,
@@ -104,6 +142,8 @@ def google_auth_url(current_user_id: str):
         "spreadsheet_id": spreadsheet_id,
         "techstack": techstack,
     }
+    if profile_id:
+        state_payload["profile_id"] = profile_id
     state = jwt.encode(
         state_payload,
         current_app.config["SECRET_KEY"],
@@ -195,7 +235,7 @@ def google_callback():
         "scopes": list(credentials.scopes or []),
     }
 
-    profile_id = create_profile_from_oauth_state(
+    profile_id = create_or_update_profile_from_oauth_state(
         state_payload=state_payload,
         google_credentials=google_credentials,
     )
