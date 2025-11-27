@@ -8,22 +8,15 @@ from config import Config
 
 bcrypt = Bcrypt()
 # Configure SocketIO for Railway/production deployment
-import os
-# Detect Railway environment - Railway's proxy doesn't support WebSocket upgrades
-is_railway = bool(os.getenv("RAILWAY_ENVIRONMENT_NAME") or os.getenv("RAILWAY"))
-
+# Allow both polling and websocket transports for better compatibility
 socketio = SocketIO(
     async_mode="gevent",
     cors_allowed_origins="*",
-    # CRITICAL: Disable WebSocket upgrades on Railway - only polling works
-    allow_upgrades=not is_railway,
-    transports=["polling", "websocket"] if not is_railway else ["polling"],
+    allow_upgrades=True,
+    transports=["polling", "websocket"],
     ping_timeout=60,
     ping_interval=25,
     max_http_buffer_size=1e6,
-    # Enable logging to debug connection issues
-    logger=True,
-    engineio_logger=True,
 )
 
 

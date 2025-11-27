@@ -35,15 +35,10 @@ export const SheetManagementPage = () => {
     // Get base URL - for Railway, use the same origin as API
     const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace('/api', '') ?? 'http://localhost:5001';
     
-    // Detect if we're on Railway/production - Railway doesn't support WebSocket upgrades
-    const isProduction = baseUrl.includes('railway.app') || baseUrl.startsWith('https://');
-    
     return io(baseUrl, {
       autoConnect: false,
-      // CRITICAL: Force polling-only on Railway - WebSocket upgrades don't work through Railway's proxy
-      transports: isProduction ? ['polling'] : ['polling', 'websocket'],
-      // Disable upgrade attempts on Railway
-      upgrade: !isProduction,
+      // Allow both polling and websocket - polling works better through Railway's proxy
+      transports: ['polling', 'websocket'],
       // Enable reconnection
       reconnection: true,
       reconnectionDelay: 1000,
