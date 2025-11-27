@@ -32,20 +32,10 @@ export const SheetManagementPage = () => {
   );
 
   const socket: Socket | null = useMemo(() => {
-    // Get base URL - for Railway, use the same origin as API
-    const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace('/api', '') ?? 'http://localhost:5001';
-    
-    return io(baseUrl, {
+    // Assume backend websocket is served from same origin/port as API
+    return io(import.meta.env.VITE_API_BASE_URL?.replace('/api', '') ?? 'http://localhost:5001', {
       autoConnect: false,
-      // Allow both polling and websocket - polling works better through Railway's proxy
-      transports: ['polling', 'websocket'],
-      // Enable reconnection
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
-      // Timeout settings
-      timeout: 20000,
+      transports: ['websocket']
     });
   }, []);
   const jobUrlIndex =
