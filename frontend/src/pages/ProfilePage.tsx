@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 
 type TechStackCategory =
   | 'frontend'
@@ -55,6 +56,7 @@ export const ProfilePage = () => {
   const [error, setError] = useState<string | null>(null);
   const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const { logout } = useAuth();
 
   const loadProfiles = async () => {
     try {
@@ -146,12 +148,31 @@ export const ProfilePage = () => {
       });
   };
 
+  const handleSignOut = () => {
+    // Best-effort notify backend, but always clear local auth and redirect
+    void api.post('/auth/logout').finally(() => {
+      logout();
+      navigate('/auth');
+    });
+  };
+
   return (
     <div>
-      <h2 className="text-2xl font-semibold mb-4">Profile Management</h2>
-      <p className="text-slate-400 text-sm mb-6">
-        Configure profiles that map a Google account and spreadsheet with a tech stack focus.
-      </p>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-2xl font-semibold">Profile Management</h2>
+          <p className="text-slate-400 text-sm mt-1">
+            Configure profiles that map a Google account and spreadsheet with a tech stack focus.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="text-xs px-3 py-1.5 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
+        >
+          Sign out
+        </button>
+      </div>
 
       {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
 
