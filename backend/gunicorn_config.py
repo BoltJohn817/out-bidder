@@ -3,10 +3,7 @@
 import multiprocessing
 
 # Server socket
-# Azure Web Apps use PORT environment variable, fallback to 5001 for local dev
-import os
-port = os.getenv("PORT", "5001")
-bind = f"0.0.0.0:{port}"
+bind = "0.0.0.0:5001"
 backlog = 2048
 
 # Worker processes
@@ -37,6 +34,7 @@ tmp_upload_dir = None
 # keyfile = None
 # certfile = None
 
+import os
 import psutil
 
 def post_worker_init(worker):
