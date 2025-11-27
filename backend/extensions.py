@@ -7,7 +7,7 @@ import jwt
 from config import Config
 
 bcrypt = Bcrypt()
-socketio = SocketIO(cors_allowed_origins="*")
+socketio = SocketIO(async_mode="gevent", cors_allowed_origins="*")
 
 
 class JWTManager:

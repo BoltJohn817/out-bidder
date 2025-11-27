@@ -29,8 +29,10 @@ def create_app() -> Flask:
     return app
 
 
+# Create application instance for gunicorn
+application = create_app()
+
 if __name__ == "__main__":
-    application = create_app()
     socketio.run(application, host="0.0.0.0", port=5001, debug=True)
 
 
