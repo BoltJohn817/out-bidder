@@ -11,6 +11,7 @@ from models import (
     clear_application_statuses_for_sheet,
     create_or_update_profile_from_oauth_state,
     create_profile,
+    delete_profile,
     get_application_statuses_for_sheet,
     get_profile_with_credentials,
     list_profiles,
@@ -99,6 +100,22 @@ def update_profile_route(current_user_id: str, profile_id: str):
         return jsonify({"message": "Profile not found"}), 404
 
     return jsonify({"profile_id": profile_id}), 200
+
+
+@profile_bp.delete("/<profile_id>")
+@require_auth
+def delete_profile_route(current_user_id: str, profile_id: str):
+    """
+    Delete a profile and all associated data (applications, bids references).
+    """
+    deleted = delete_profile(
+        owner_user_id=current_user_id,
+        profile_id=profile_id,
+    )
+    if not deleted:
+        return jsonify({"message": "Profile not found"}), 404
+
+    return jsonify({"message": "Profile deleted successfully"}), 200
 
 
 def _build_oauth_flow(redirect_uri: str) -> Flow:

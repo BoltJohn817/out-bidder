@@ -156,6 +156,27 @@ export const ProfilePage = () => {
     });
   };
 
+  const handleDeleteProfile = async (profileId: string, profileName: string) => {
+    if (!confirm(`Are you sure you want to delete the profile "${profileName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setError(null);
+      await api.delete(`/profiles/${profileId}`);
+      
+      // If the deleted profile was selected, reset the form
+      if (selectedProfileId === profileId) {
+        resetForm();
+      }
+      
+      // Reload profiles list
+      void loadProfiles();
+    } catch (err: any) {
+      setError(err?.response?.data?.message ?? 'Failed to delete profile');
+    }
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -340,13 +361,20 @@ export const ProfilePage = () => {
                     </span>
                   ))}
                 </div>
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => navigate(`/profiles/${p._id}/sheets`)}
                     className="text-xs text-sky-400 hover:text-sky-300"
                   >
                     Manage sheets
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteProfile(p._id, p.name)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Delete
                   </button>
                 </div>
               </li>

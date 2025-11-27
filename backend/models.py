@@ -102,6 +102,43 @@ def update_profile(
     return res.matched_count == 1
 
 
+def delete_profile(owner_user_id: str, profile_id: str) -> bool:
+    """
+    Delete a profile and all associated data (applications, bids referencing it).
+    Returns True if profile was found and deleted, False otherwise.
+    """
+    profile_obj_id = ObjectId(profile_id)
+    
+    # Verify the profile exists and belongs to the user
+    profile = profiles_collection().find_one(
+        {"_id": profile_obj_id, "owner_user_id": owner_user_id}
+    )
+    if not profile:
+        return False
+    
+    # Delete all application statuses associated with this profile
+    applications_collection().delete_many(
+        {
+            "owner_user_id": owner_user_id,
+            "profile_id": profile_obj_id,
+        }
+    )
+    
+    # Delete all bids associated with this profile
+    bids_collection().delete_many(
+        {
+            "owner_user_id": owner_user_id,
+            "profile_id": profile_obj_id,
+        }
+    )
+    
+    # Delete the profile itself
+    res = profiles_collection().delete_one(
+        {"_id": profile_obj_id, "owner_user_id": owner_user_id}
+    )
+    return res.deleted_count == 1
+
+
 def create_or_update_profile_from_oauth_state(
     state_payload: Dict[str, Any],
     google_credentials: Dict[str, Any],
