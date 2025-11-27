@@ -18,6 +18,14 @@ interface ProfileForm {
   techstack: TechStackCategory[];
 }
 
+interface ProfileApi {
+  _id: string;
+  name: string;
+  google_email: string;
+  spreadsheet_id: string;
+  techstack: TechStackCategory[];
+}
+
 interface Profile extends ProfileForm {
   _id: string;
 }
@@ -50,8 +58,15 @@ export const ProfilePage = () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await api.get<{ profiles: Profile[] }>('/profiles/');
-      setProfiles(res.data.profiles);
+      const res = await api.get<{ profiles: ProfileApi[] }>('/profiles/');
+      const mapped: Profile[] = res.data.profiles.map((p) => ({
+        _id: p._id,
+        name: p.name,
+        googleEmail: p.google_email,
+        spreadsheetId: p.spreadsheet_id,
+        techstack: p.techstack
+      }));
+      setProfiles(mapped);
     } catch (err: any) {
       setError(err?.response?.data?.message ?? 'Failed to load profiles');
     } finally {
@@ -268,8 +283,8 @@ export const ProfilePage = () => {
                   setSelectedProfileId(p._id);
                   setForm({
                     name: p.name,
-                    googleEmail: p.google_email,
-                    spreadsheetId: p.spreadsheet_id,
+                    googleEmail: p.googleEmail,
+                    spreadsheetId: p.spreadsheetId,
                     techstack: p.techstack
                   });
                   setGoogleAuthUrl(null);
