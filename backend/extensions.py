@@ -30,6 +30,7 @@ class JWTManager:
 
 jwt_manager = JWTManager()
 
+print(f"Connected to MongoDB: {Config.MONGODB_URI}")
 mongo_client = MongoClient(Config.MONGODB_URI)
 db = mongo_client.get_default_database()
 
