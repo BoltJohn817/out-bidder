@@ -21,7 +21,7 @@ else:
     # For local dev with more resources, set GUNICORN_WORKERS env var
     workers = 2
 
-worker_class = "gevent"  # Required for Flask-SocketIO (gevent has better Python 3.13 support)
+worker_class = "gevent"  # Required for Flask-SocketIO
 # Reduced worker_connections for memory efficiency on Railway
 worker_connections = int(os.getenv("GUNICORN_WORKER_CONNECTIONS", "100"))
 timeout = 30
