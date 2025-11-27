@@ -1,9 +1,12 @@
 """Gunicorn configuration file for Flask-SocketIO application."""
 
 import multiprocessing
+import os
 
 # Server socket
-bind = "0.0.0.0:5001"
+# Use PORT environment variable if available (Railway, Heroku, etc.), otherwise default to 5001
+port = os.getenv("PORT", "5001")
+bind = f"0.0.0.0:{port}"
 backlog = 2048
 
 # Worker processes
@@ -34,7 +37,6 @@ tmp_upload_dir = None
 # keyfile = None
 # certfile = None
 
-import os
 import psutil
 
 def post_worker_init(worker):
