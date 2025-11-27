@@ -23,10 +23,47 @@ export const SheetManagementPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedJobUrl, setSelectedJobUrl] = useState<string | null>(null);
+  const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
+  const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
   const jobUrlIndex =
     headers.findIndex((h) => h.toLowerCase().trim() === 'job url') !== -1
       ? headers.findIndex((h) => h.toLowerCase().trim() === 'job url')
       : 2; // fallback to column C
+  const companyIndex =
+    headers.findIndex((h) => h.toLowerCase().includes('company')) !== -1
+      ? headers.findIndex((h) => h.toLowerCase().includes('company'))
+      : 0;
+  const appliedDateIndex =
+    headers.findIndex((h) => h.toLowerCase().includes('date')) !== -1
+      ? headers.findIndex((h) => h.toLowerCase().includes('date'))
+      : 1;
+
+  const handleCheckApplied = async (rowIndex: number) => {
+    if (!profileId) return;
+    const row = rows[rowIndex];
+    const company = row[companyIndex];
+    const appliedDate = row[appliedDateIndex];
+    if (!company || !appliedDate) {
+      return;
+    }
+    try {
+      setCheckingIndex(rowIndex);
+      setError(null);
+      const res = await api.post<{ applied: boolean }>(`/profiles/${profileId}/gmail/check-application`, {
+        company_name: company,
+        applied_date: appliedDate
+      });
+      setAppliedStatus((prev) => ({
+        ...prev,
+        [rowIndex]: res.data.applied ? 'applied' : 'not_applied'
+      }));
+    } catch (err: any) {
+      setAppliedStatus((prev) => ({ ...prev, [rowIndex]: 'error' }));
+      setError(err?.response?.data?.message ?? 'Failed to check Gmail for this position');
+    } finally {
+      setCheckingIndex(null);
+    }
+  };
 
   const loadSheets = async () => {
     if (!profileId) return;
@@ -149,6 +186,9 @@ export const SheetManagementPage = () => {
                           {h}
                         </th>
                       ))}
+                      <th className="px-3 py-2 text-left font-semibold border-b border-slate-700">
+                        Applied?
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -176,6 +216,30 @@ export const SheetManagementPage = () => {
                             </td>
                           );
                         })}
+                        <td className="px-3 py-1 border-b border-slate-800 align-top whitespace-nowrap">
+                          {appliedStatus[idx] === 'applied' && (
+                            <span className="text-emerald-400 text-xs font-semibold">Applied</span>
+                          )}
+                          {appliedStatus[idx] === 'not_applied' && (
+                            <span className="text-slate-300 text-xs">Not found</span>
+                          )}
+                          {appliedStatus[idx] === 'error' && (
+                            <span className="text-red-400 text-xs">Error</span>
+                          )}
+                          {!appliedStatus[idx] && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleCheckApplied(idx);
+                              }}
+                              className="text-xs text-sky-400 hover:text-sky-300"
+                              disabled={checkingIndex === idx}
+                            >
+                              {checkingIndex === idx ? 'Checking...' : 'Check'}
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

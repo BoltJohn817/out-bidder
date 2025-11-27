@@ -14,6 +14,7 @@ from models import (
     list_profiles,
     update_profile,
 )
+from gmail_utils import search_gmail_for_company
 
 profile_bp = Blueprint("profiles", __name__)
 
@@ -247,7 +248,7 @@ def google_callback():
     return redirect(f"{frontend_url}?google_connected=1&profile_id={profile_id}")
 
 
-def _build_sheets_credentials(profile: dict) -> Credentials:
+def _build_google_credentials(profile: dict) -> Credentials:
     creds_info = profile.get("google_credentials")
     if not creds_info:
         raise ValueError("Profile does not have Google credentials")
@@ -286,7 +287,7 @@ def list_sheets(current_user_id: str, profile_id: str):
         return jsonify({"message": "Profile not found"}), 404
 
     try:
-        creds = _build_sheets_credentials(profile)
+        creds = _build_google_credentials(profile)
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
 
@@ -318,7 +319,7 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
         return jsonify({"message": "Profile not found"}), 404
 
     try:
-        creds = _build_sheets_credentials(profile)
+        creds = _build_google_credentials(profile)
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
 
@@ -380,5 +381,44 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
             "rows": rows,
         }
     ), 200
+
+
+@profile_bp.post("/<profile_id>/gmail/check-application")
+@require_auth
+def check_gmail_application(current_user_id: str, profile_id: str):
+    """
+    Check if a position appears to be applied based on Gmail messages for the profile's account.
+
+    Body: { company_name: string, applied_date: string, applied_time?: string }
+    Returns: { applied: bool }
+    """
+    data = request.get_json(silent=True) or {}
+    company_name = data.get("company_name")
+    applied_date = data.get("applied_date")
+    applied_time = data.get("applied_time")
+
+    if not company_name or not applied_date:
+        return jsonify({"message": "company_name and applied_date are required"}), 400
+
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return jsonify({"message": "Profile not found"}), 404
+
+    try:
+        creds = _build_google_credentials(profile)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    try:
+        applied = search_gmail_for_company(
+            creds=creds,
+            company=company_name,
+            applied_date=applied_date,
+            applied_time=applied_time,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"message": f"Failed to query Gmail: {exc}"}), 500
+
+    return jsonify({"applied": applied}), 200
 
 
