@@ -22,6 +22,11 @@ export const SheetManagementPage = () => {
   const [rows, setRows] = useState<string[][]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedJobUrl, setSelectedJobUrl] = useState<string | null>(null);
+  const jobUrlIndex =
+    headers.findIndex((h) => h.toLowerCase().trim() === 'job url') !== -1
+      ? headers.findIndex((h) => h.toLowerCase().trim() === 'job url')
+      : 2; // fallback to column C
 
   const loadSheets = async () => {
     if (!profileId) return;
@@ -119,41 +124,93 @@ export const SheetManagementPage = () => {
           </ul>
         </div>
 
-        <div className="md:col-span-3 bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-auto">
-          <h3 className="text-sm font-semibold text-slate-200 mb-3">
-            Sheet content (columns A–G)
-          </h3>
-          {loading && rows.length === 0 && <p className="text-sm text-slate-400">Loading...</p>}
-          {!loading && rows.length === 0 && (
-            <p className="text-sm text-slate-400">No data found in this sheet.</p>
-          )}
+        <div className="md:col-span-3 space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-slate-200 mb-3">
+              Sheet content (columns A–G)
+            </h3>
+            {loading && rows.length === 0 && (
+              <p className="text-sm text-slate-400">Loading...</p>
+            )}
+            {!loading && rows.length === 0 && (
+              <p className="text-sm text-slate-400">No data found in this sheet.</p>
+            )}
 
-          {rows.length > 0 && (
-            <div className="overflow-auto">
-              <table className="min-w-full text-xs border border-slate-800">
-                <thead className="bg-slate-800">
-                  <tr>
-                    {headers.map((h) => (
-                      <th key={h} className="px-3 py-2 text-left font-semibold border-b border-slate-700">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, idx) => (
-                    <tr key={idx} className="odd:bg-slate-950 even:bg-slate-900">
-                      {row.map((cell, cidx) => (
-                        <td key={cidx} className="px-3 py-1 border-b border-slate-800 align-top">
-                          {cell}
-                        </td>
+            {rows.length > 0 && (
+              <div className="overflow-auto max-h-64">
+                <table className="min-w-full text-xs border border-slate-800">
+                  <thead className="bg-slate-800">
+                    <tr>
+                      {headers.map((h) => (
+                        <th
+                          key={h}
+                          className="px-3 py-2 text-left font-semibold border-b border-slate-700"
+                        >
+                          {h}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, idx) => (
+                      <tr
+                        key={idx}
+                        className="odd:bg-slate-950 even:bg-slate-900 cursor-pointer hover:bg-slate-800/70"
+                        onClick={() => {
+                          const url = row[jobUrlIndex];
+                          if (url) {
+                            setSelectedJobUrl(url);
+                          }
+                        }}
+                      >
+                        {row.map((cell, cidx) => {
+                          const isJobUrl = cidx === jobUrlIndex;
+                          return (
+                            <td
+                              key={cidx}
+                              className={`px-3 py-1 border-b border-slate-800 align-top max-w-xs break-words ${
+                                isJobUrl ? 'text-sky-300' : ''
+                              }`}
+                            >
+                              {cell}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 h-[560px]">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-slate-200">External job page preview</h3>
+              {selectedJobUrl && (
+                <a
+                  href={selectedJobUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  Open in new tab
+                </a>
+              )}
             </div>
-          )}
+            {!selectedJobUrl && (
+              <p className="text-sm text-slate-400">
+                Select a row&apos;s Job Url to preview the external job page here.
+              </p>
+            )}
+            {selectedJobUrl && (
+              <iframe
+                src={selectedJobUrl}
+                title="Job page preview"
+                className="w-full h-full rounded-lg border border-slate-800 bg-white"
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
