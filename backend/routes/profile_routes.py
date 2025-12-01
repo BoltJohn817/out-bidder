@@ -1,6 +1,5 @@
 from flask import Blueprint, current_app, jsonify, redirect, request
 import jwt
-from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -23,6 +22,18 @@ from extensions import socketio
 import uuid
 from flask_socketio import join_room
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils import (
+    build_google_credentials,
+    build_sheets_service,
+    build_gmail_service,
+    get_sheet_title,
+    find_header_row,
+    parse_sheet_columns,
+    convert_objectids_in_list,
+    error_response,
+    success_response,
+    validation_error,
+)
 
 profile_bp = Blueprint("profiles", __name__)
 
@@ -32,12 +43,12 @@ profile_bp = Blueprint("profiles", __name__)
 def get_profiles(current_user_id: str):
     profiles = list_profiles(current_user_id)
     # Convert ObjectIds to strings for JSON
+    profiles = convert_objectids_in_list(profiles)
+    # Never leak raw Google credentials to the frontend
     for p in profiles:
-        p["_id"] = str(p.get("_id"))
-        # Never leak raw Google credentials to the frontend
         if "google_credentials" in p:
             del p["google_credentials"]
-    return jsonify({"profiles": profiles}), 200
+    return success_response({"profiles": profiles})
 
 
 @profile_bp.post("/")
@@ -50,17 +61,17 @@ def create_profile_route(current_user_id: str):
     techstack = data.get("techstack") or []
 
     if not name or not google_email or not spreadsheet_id:
-        return (
-            jsonify(
-                {
-                    "message": "name, google_email and spreadsheet_id are required",
-                }
-            ),
-            400,
-        )
+        missing = []
+        if not name:
+            missing.append("name")
+        if not google_email:
+            missing.append("google_email")
+        if not spreadsheet_id:
+            missing.append("spreadsheet_id")
+        return validation_error(missing)
 
     if not isinstance(techstack, list):
-        return jsonify({"message": "techstack must be a list"}), 400
+        return error_response("techstack must be a list")
 
     profile_id = create_profile(
         owner_user_id=current_user_id,
@@ -69,7 +80,7 @@ def create_profile_route(current_user_id: str):
         spreadsheet_id=spreadsheet_id,
         techstack=techstack,
     )
-    return jsonify({"profile_id": profile_id}), 201
+    return success_response({"profile_id": profile_id}, 201)
 
 
 @profile_bp.put("/<profile_id>")
@@ -86,7 +97,7 @@ def update_profile_route(current_user_id: str, profile_id: str):
     techstack = data.get("techstack")
 
     if techstack is not None and not isinstance(techstack, list):
-        return jsonify({"message": "techstack must be a list"}), 400
+        return error_response("techstack must be a list")
 
     updated = update_profile(
         owner_user_id=current_user_id,
@@ -97,9 +108,9 @@ def update_profile_route(current_user_id: str, profile_id: str):
         techstack=techstack,
     )
     if not updated:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
-    return jsonify({"profile_id": profile_id}), 200
+    return success_response({"profile_id": profile_id})
 
 
 @profile_bp.delete("/<profile_id>")
@@ -113,9 +124,9 @@ def delete_profile_route(current_user_id: str, profile_id: str):
         profile_id=profile_id,
     )
     if not deleted:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
-    return jsonify({"message": "Profile deleted successfully"}), 200
+    return success_response({"message": "Profile deleted successfully"})
 
 
 def _build_oauth_flow(redirect_uri: str) -> Flow:
@@ -148,14 +159,14 @@ def google_auth_url(current_user_id: str):
     techstack = data.get("techstack") or []
 
     if not name or not google_email or not spreadsheet_id:
-        return (
-            jsonify(
-                {
-                    "message": "name, google_email and spreadsheet_id are required",
-                }
-            ),
-            400,
-        )
+        missing = []
+        if not name:
+            missing.append("name")
+        if not google_email:
+            missing.append("google_email")
+        if not spreadsheet_id:
+            missing.append("spreadsheet_id")
+        return validation_error(missing)
 
     # Optional: profile_id when refreshing Google credentials for an existing profile
     profile_id = data.get("profile_id")
@@ -184,7 +195,7 @@ def google_auth_url(current_user_id: str):
         state=state,
     )
 
-    return jsonify({"auth_url": auth_url}), 200
+    return success_response({"auth_url": auth_url})
 
 
 @profile_bp.get("/google/callback")
@@ -197,12 +208,12 @@ def google_callback():
     """
     error = request.args.get("error")
     if error:
-        return jsonify({"message": f"Google OAuth error: {error}"}), 400
+        return error_response(f"Google OAuth error: {error}")
 
     code = request.args.get("code")
     state = request.args.get("state")
     if not code or not state:
-        return jsonify({"message": "Missing code or state"}), 400
+        return error_response("Missing code or state")
 
     try:
         state_payload = jwt.decode(
@@ -211,44 +222,33 @@ def google_callback():
             algorithms=["HS256"],
         )
     except Exception:
-        return jsonify({"message": "Invalid state parameter"}), 400
+        return error_response("Invalid state parameter")
 
     flow = _build_oauth_flow(Config.GOOGLE_REDIRECT_URI)
     flow.fetch_token(code=code)
     credentials: Credentials = flow.credentials
 
     # Verify Gmail access: get the user's email address
-    gmail_service = build("gmail", "v1", credentials=credentials)
+    gmail_service = build_gmail_service(credentials)
     gmail_profile = gmail_service.users().getProfile(userId="me").execute()
     email_address = gmail_profile.get("emailAddress")
 
     expected_email = state_payload.get("google_email")
     if expected_email and email_address and email_address.lower() != expected_email.lower():
-        return (
-            jsonify(
-                {
-                    "message": "Authenticated Google account does not match requested google_email",
-                    "expected_email": expected_email,
-                    "actual_email": email_address,
-                }
-            ),
-            400,
+        return error_response(
+            "Authenticated Google account does not match requested google_email",
+            details={"expected_email": expected_email, "actual_email": email_address}
         )
 
     # Verify Sheets access by fetching spreadsheet metadata
     spreadsheet_id = state_payload.get("spreadsheet_id")
     try:
-        sheets_service = build("sheets", "v4", credentials=credentials)
+        sheets_service = build_sheets_service(credentials)
         sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     except Exception as exc:  # noqa: BLE001
-        return (
-            jsonify(
-                {
-                    "message": "Failed to access Google Sheet with provided account.",
-                    "details": str(exc),
-                }
-            ),
-            400,
+        return error_response(
+            "Failed to access Google Sheet with provided account.",
+            details=str(exc)
         )
 
     # Persist credentials with the new profile
@@ -272,34 +272,6 @@ def google_callback():
     return redirect(f"{frontend_url}?google_connected=1&profile_id={profile_id}")
 
 
-def _build_google_credentials(profile: dict) -> Credentials:
-    creds_info = profile.get("google_credentials")
-    if not creds_info:
-        raise ValueError("Profile does not have Google credentials")
-
-    creds = Credentials(
-        token=creds_info.get("token"),
-        refresh_token=creds_info.get("refresh_token"),
-        token_uri=creds_info.get("token_uri"),
-        client_id=creds_info.get("client_id"),
-        client_secret=creds_info.get("client_secret"),
-        scopes=creds_info.get("scopes"),
-    )
-
-    if creds.expired and creds.refresh_token:
-        creds.refresh(GoogleRequest())
-        # Persist refreshed token
-        profiles_collection = get_profile_with_credentials.__globals__["profiles_collection"]  # type: ignore[index]
-        profiles_collection().update_one(
-            {"_id": profile["_id"]},
-            {
-                "$set": {
-                    "google_credentials.token": creds.token,
-                }
-            },
-        )
-
-    return creds
 
 
 @profile_bp.get("/<profile_id>/sheets")
@@ -308,15 +280,15 @@ def list_sheets(current_user_id: str, profile_id: str):
     """List sheets (tabs) available in the profile's spreadsheet."""
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
     try:
-        creds = _build_google_credentials(profile)
+        creds = build_google_credentials(profile)
     except ValueError as exc:
-        return jsonify({"message": str(exc)}), 400
+        return error_response(str(exc))
 
     spreadsheet_id = profile.get("spreadsheet_id")
-    service = build("sheets", "v4", credentials=creds)
+    service = build_sheets_service(creds)
     meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     sheets = meta.get("sheets", [])
 
@@ -331,7 +303,7 @@ def list_sheets(current_user_id: str, profile_id: str):
             }
         )
 
-    return jsonify({"sheets": result}), 200
+    return success_response({"sheets": result})
 
 
 @profile_bp.get("/<profile_id>/sheets/<int:sheet_id>")
@@ -340,27 +312,19 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
     """Return values from columns A-G of the given sheet."""
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
     try:
-        creds = _build_google_credentials(profile)
+        creds = build_google_credentials(profile)
     except ValueError as exc:
-        return jsonify({"message": str(exc)}), 400
+        return error_response(str(exc))
 
     spreadsheet_id = profile.get("spreadsheet_id")
-    service = build("sheets", "v4", credentials=creds)
-    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    sheets = meta.get("sheets", [])
-
-    title = None
-    for s in sheets:
-        props = s.get("properties", {})
-        if props.get("sheetId") == sheet_id:
-            title = props.get("title")
-            break
-
+    service = build_sheets_service(creds)
+    
+    title = get_sheet_title(service, spreadsheet_id, sheet_id)
     if not title:
-        return jsonify({"message": "Sheet not found"}), 404
+        return error_response("Sheet not found", 404)
 
     range_a_g = f"'{title}'!A:G"
     res = (
@@ -373,56 +337,30 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
 
     # If there are no rows, just return empty headers/rows
     if not values:
-        return (
-            jsonify(
-                {
-                    "sheet_id": sheet_id,
-                    "title": title,
-                    "headers": [],
-                    "rows": [],
-                }
-            ),
-            200,
+        return success_response(
+            {
+                "sheet_id": sheet_id,
+                "title": title,
+                "headers": [],
+                "rows": [],
+            }
         )
 
-    # Find the header row by searching for expected column names
-    def _find_header_row(rows: list[list[str]]) -> int:
-        """Find the row that contains the expected column headers."""
-        expected_keywords = ["company", "position"]
-        for idx, row in enumerate(rows):
-            row_lower = [str(cell).lower() for cell in row]
-            # Check if this row contains the expected keywords
-            has_company = any("company" in cell for cell in row_lower)
-            has_position = any("position" in cell for cell in row_lower)
-            has_url = any("job url" in cell or "url" in cell for cell in row_lower)
-            
-            # If we find at least 2 out of 3 expected columns, consider this the header row
-            matches = sum([has_company, has_position, has_url])
-            if matches >= 2:
-                return idx
-        # Fallback to first row if no header row found
-        return 0
-
-    header_row_idx = _find_header_row(values)
+    # Find the header row
+    header_row_idx = find_header_row(values, min_matches=2)
     raw_headers = values[header_row_idx]
     data_rows = values[header_row_idx + 1:]
 
     # Only look at columns A–G (0–6)
     headers = (raw_headers + [""] * 7)[:7]
 
-    # Determine indices for required fields
-    def _find_index(predicate, default: int) -> int:
-        try:
-            return next(i for i, h in enumerate(headers) if predicate(h.lower()))
-        except StopIteration:
-            return default
-
-    company_idx = _find_index(lambda h: "company" in h, 0)
-    position_idx = _find_index(lambda h: "position" in h, 2)
-    job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
+    # Parse column indices
+    column_indices = parse_sheet_columns(headers)
+    company_idx = column_indices["company_idx"]
+    position_idx = column_indices["position_idx"]
+    job_url_idx = column_indices["job_url_idx"]
 
     # Load any cached application statuses for this sheet (keyed by original row index)
-    spreadsheet_id = profile.get("spreadsheet_id")
     status_map = get_application_statuses_for_sheet(
         owner_user_id=current_user_id,
         profile_id=profile_id,
@@ -445,7 +383,7 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
         rows.append(padded)
         statuses.append(status_map.get(idx))
 
-    return jsonify(
+    return success_response(
         {
             "sheet_id": sheet_id,
             "title": title,
@@ -453,7 +391,7 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
             "rows": rows,
             "statuses": statuses,
         }
-    ), 200
+    )
 
 
 @profile_bp.post("/<profile_id>/gmail/check-application")
@@ -483,16 +421,25 @@ def check_gmail_application(current_user_id: str, profile_id: str):
     job_url = data.get("job_url")
 
     if not company_name or not applied_date or sheet_id is None or row_index is None:
-        return jsonify({"message": "company_name, applied_date, sheet_id and row_index are required"}), 400
+        missing = []
+        if not company_name:
+            missing.append("company_name")
+        if not applied_date:
+            missing.append("applied_date")
+        if sheet_id is None:
+            missing.append("sheet_id")
+        if row_index is None:
+            missing.append("row_index")
+        return validation_error(missing)
 
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
     try:
-        creds = _build_google_credentials(profile)
+        creds = build_google_credentials(profile)
     except ValueError as exc:
-        return jsonify({"message": str(exc)}), 400
+        return error_response(str(exc))
 
     try:
         applied = search_gmail_for_company(
@@ -502,7 +449,7 @@ def check_gmail_application(current_user_id: str, profile_id: str):
             applied_time=applied_time,
         )
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"message": f"Failed to query Gmail: {exc}"}), 500
+        return error_response(f"Failed to query Gmail: {exc}", 500)
 
     # Persist status so subsequent loads can avoid recalculation
     spreadsheet_id = profile.get("spreadsheet_id")
@@ -519,7 +466,7 @@ def check_gmail_application(current_user_id: str, profile_id: str):
         status="applied" if applied else "not_applied",
     )
 
-    return jsonify({"applied": applied}), 200
+    return success_response({"applied": applied})
 
 
 @profile_bp.post("/<profile_id>/sheets/<int:sheet_id>/gmail/check-all")
@@ -532,7 +479,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     """
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
-        return jsonify({"message": "Profile not found"}), 404
+        return error_response("Profile not found", 404)
 
     spreadsheet_id = profile.get("spreadsheet_id")
     # Preprocessing: synchronously clear all previous statuses for this sheet
@@ -547,7 +494,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
     def _worker():
         try:
-            creds = _build_google_credentials(profile)
+            creds = build_google_credentials(profile)
         except ValueError as exc:
             socketio.emit(
                 "application_check_error",
@@ -556,17 +503,10 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             )
             return
 
-        service = build("sheets", "v4", credentials=creds)
+        service = build_sheets_service(creds)
 
-        # Fetch sheet metadata to get title
-        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheets = meta.get("sheets", [])
-        title = None
-        for s in sheets:
-            props = s.get("properties", {})
-            if props.get("sheetId") == sheet_id:
-                title = props.get("title")
-                break
+        # Fetch sheet title
+        title = get_sheet_title(service, spreadsheet_id, sheet_id)
         if not title:
             socketio.emit(
                 "application_check_error",
@@ -592,40 +532,17 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             )
             return
 
-        # Find the header row by searching for expected column names
-        def _find_header_row(rows: list[list[str]]) -> int:
-            """Find the row that contains the expected column headers."""
-            expected_keywords = ["company", "date", "position"]
-            for idx, row in enumerate(rows):
-                row_lower = [str(cell).lower() for cell in row]
-                # Check if this row contains the expected keywords
-                has_company = any("company" in cell for cell in row_lower)
-                has_date = any("date" in cell for cell in row_lower)
-                has_position = any("position" in cell for cell in row_lower)
-                has_url = any("job url" in cell or "url" in cell for cell in row_lower)
-                
-                # If we find at least 3 out of 4 expected columns, consider this the header row
-                matches = sum([has_company, has_date, has_position, has_url])
-                if matches >= 3:
-                    return idx
-            # Fallback to first row if no header row found
-            return 0
-
-        header_row_idx = _find_header_row(values)
+        # Find the header row
+        header_row_idx = find_header_row(values, min_matches=3)
         headers = (values[header_row_idx] + [""] * 7)[:7]
         data_rows = values[header_row_idx + 1:]
 
-        # Detect relevant columns by header names
-        def _find_index(predicate, default: int) -> int:
-            try:
-                return next(i for i, h in enumerate(headers) if predicate(h.lower()))
-            except StopIteration:
-                return default
-
-        company_idx = _find_index(lambda h: "company" in h, 0)
-        date_idx = _find_index(lambda h: "date" in h, 1)
-        position_idx = _find_index(lambda h: "position" in h, 2)
-        job_url_idx = _find_index(lambda h: "job url" in h or "url" in h, 3)
+        # Parse column indices
+        column_indices = parse_sheet_columns(headers)
+        company_idx = column_indices["company_idx"]
+        date_idx = column_indices["date_idx"]
+        position_idx = column_indices["position_idx"]
+        job_url_idx = column_indices["job_url_idx"]
 
         statuses: list[str | None] = [None] * len(data_rows)
 
@@ -696,7 +613,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
     socketio.start_background_task(_worker)
 
-    return jsonify({"job_id": job_id}), 202
+    return success_response({"job_id": job_id}, 202)
 
 
 @socketio.on("join_job")

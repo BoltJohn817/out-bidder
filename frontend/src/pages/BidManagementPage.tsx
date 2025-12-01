@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import api from '../api/client';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { EmptyState } from '../components/EmptyState';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 interface Bid {
   _id?: string;
@@ -60,7 +63,7 @@ export const BidManagementPage = () => {
         Track bids created using your profiles and Google spreadsheets.
       </p>
 
-      {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
+      <ErrorMessage message={error} className="mb-4" />
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
@@ -115,9 +118,14 @@ export const BidManagementPage = () => {
               Refresh
             </button>
           </div>
-          {loading && <p className="text-sm text-slate-400">Loading...</p>}
+          {loading && (
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <LoadingSpinner size="sm" />
+              <span>Loading...</span>
+            </div>
+          )}
           {!loading && bids.length === 0 && (
-            <p className="text-sm text-slate-400">No bids yet. Create your first one.</p>
+            <EmptyState message="No bids yet. Create your first one." />
           )}
           <ul className="space-y-2">
             {bids.map((bid) => (

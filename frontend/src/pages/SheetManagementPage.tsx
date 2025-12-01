@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import api from '../api/client';
-
-interface RouteParams {
-  profileId: string;
-}
+import { useSheetColumns } from '../hooks/useSheetColumns';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { EmptyState } from '../components/EmptyState';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { SheetTableRow } from '../components/SheetTableRow';
 
 interface SheetSummary {
   sheet_id: number;
@@ -14,7 +15,7 @@ interface SheetSummary {
 }
 
 export const SheetManagementPage = () => {
-  const { profileId } = useParams<RouteParams>();
+  const { profileId } = useParams<{ profileId: string }>();
   const navigate = useNavigate();
 
   const [sheets, setSheets] = useState<SheetSummary[]>([]);
@@ -42,28 +43,22 @@ export const SheetManagementPage = () => {
       transports: ['websocket']
     });
   }, []);
-  const jobUrlIndex =
-    headers.findIndex((h) => h.toLowerCase().trim() === 'job url') !== -1
-      ? headers.findIndex((h) => h.toLowerCase().trim() === 'job url')
-      : 2; // fallback to column C
-  const companyIndex =
-    headers.findIndex((h) => h.toLowerCase().includes('company')) !== -1
-      ? headers.findIndex((h) => h.toLowerCase().includes('company'))
-      : 0;
-  const appliedDateIndex =
-    headers.findIndex((h) => h.toLowerCase().includes('date')) !== -1
-      ? headers.findIndex((h) => h.toLowerCase().includes('date'))
-      : 1;
-
+  // Parse column indices using the utility hook
+  const columnIndices = useSheetColumns(headers);
+  const { companyIndex, positionIndex, jobUrlIndex, appliedDateIndex } = columnIndices;
+  
   // Only show a compact set of columns in the UI table
-  const positionIndex =
-    headers.findIndex((h) => h.toLowerCase().includes('position')) !== -1
-      ? headers.findIndex((h) => h.toLowerCase().includes('position'))
-      : 0;
-  const visibleColumnIndices = Array.from(new Set([appliedDateIndex, companyIndex, positionIndex, jobUrlIndex]));
+  const visibleColumnIndices = useMemo(
+    () => Array.from(new Set([appliedDateIndex, companyIndex, positionIndex, jobUrlIndex])),
+    [appliedDateIndex, companyIndex, positionIndex, jobUrlIndex]
+  );
 
-  const handleCheckApplied = async (rowIndex: number) => {
-    if (!profileId) return;
+  const handleSelectUrl = useCallback((url: string) => {
+    setSelectedJobUrl(url);
+  }, []);
+
+  const handleCheckApplied = useCallback(async (rowIndex: number) => {
+    if (!profileId || selectedSheetId === null) return;
     const row = rows[rowIndex];
     const company = row[companyIndex];
     const appliedDate = row[appliedDateIndex];
@@ -94,7 +89,7 @@ export const SheetManagementPage = () => {
     } finally {
       setCheckingIndex(null);
     }
-  };
+  }, [profileId, selectedSheetId, rows, companyIndex, appliedDateIndex, positionIndex, jobUrlIndex]);
 
   const loadSheets = async () => {
     if (!profileId) return;
@@ -270,7 +265,7 @@ export const SheetManagementPage = () => {
         </button>
       </div>
 
-      {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
+      <ErrorMessage message={error} className="mb-3" />
 
       <div className="grid md:grid-cols-4 gap-4">
         <div className="md:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-3">
@@ -285,10 +280,13 @@ export const SheetManagementPage = () => {
             </button>
           </div>
           {loading && sheets.length === 0 && (
-            <p className="text-xs text-slate-400">Loading...</p>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <LoadingSpinner size="sm" />
+              <span>Loading...</span>
+            </div>
           )}
           {!loading && sheets.length === 0 && (
-            <p className="text-xs text-slate-400">No sheets found for this spreadsheet.</p>
+            <EmptyState message="No sheets found for this spreadsheet." className="text-xs" />
           )}
           <ul className="space-y-1 max-h-80 overflow-auto text-sm">
             {sheets.map((s) => (
@@ -368,10 +366,13 @@ export const SheetManagementPage = () => {
               </p>
             )}
             {loading && rows.length === 0 && (
-              <p className="text-sm text-slate-400">Loading...</p>
+              <div className="flex items-center gap-2 text-sm text-slate-400">
+                <LoadingSpinner size="sm" />
+                <span>Loading...</span>
+              </div>
             )}
             {!loading && rows.length === 0 && (
-              <p className="text-sm text-slate-400">No data found in this sheet.</p>
+              <EmptyState message="No data found in this sheet." />
             )}
 
             {rows.length > 0 && (
@@ -393,74 +394,22 @@ export const SheetManagementPage = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, idx) => {
-                      const status = appliedStatus[idx];
-                      const baseColor =
-                        status === 'applied'
-                          ? 'bg-emerald-900/40'
-                          : status === 'not_applied'
-                            ? 'bg-red-900/20'
-                            : status === 'error'
-                              ? 'bg-red-900/40'
-                              : idx % 2 === 0
-                                ? 'bg-slate-950'
-                                : 'bg-slate-900';
-
-                      return (
-                        <tr
-                        key={`${idx}-${headers[idx]}`}
-                          className={`${baseColor} cursor-pointer hover:bg-slate-800/70`}
-                          onClick={() => {
-                            const url = row[jobUrlIndex];
-                            if (url) {
-                              setSelectedJobUrl(url);
-                            }
-                          }}
-                        >
-                        {visibleColumnIndices.map((cidx) => {
-                          const cell = row[cidx];
-                          const isJobUrl = cidx === jobUrlIndex;
-                          const display =
-                            isJobUrl && cell && cell.length > 40
-                              ? `${cell.slice(0, 40)}…`
-                              : cell;
-                          return (
-                            <td
-                              key={cidx}
-                              className={`px-3 py-1 border-b border-slate-800 align-top max-w-xs break-words ${
-                                isJobUrl ? 'text-sky-300' : ''
-                              }`}
-                            >
-                              {display}
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-1 border-b border-slate-800 align-top whitespace-nowrap">
-                          {appliedStatus[idx] === 'applied' && (
-                            <span className="text-emerald-400 text-xs font-semibold">Applied</span>
-                          )}
-                          {appliedStatus[idx] === 'not_applied' && (
-                            <span className="text-slate-300 text-xs">Not found</span>
-                          )}
-                          {appliedStatus[idx] === 'error' && (
-                            <span className="text-red-400 text-xs">Error</span>
-                          )}
-                          {!appliedStatus[idx] && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void handleCheckApplied(idx);
-                              }}
-                              className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
-                              disabled={checkingIndex === idx || !row[companyIndex] || !row[appliedDateIndex]}
-                            >
-                              {checkingIndex === idx ? 'Checking...' : 'Check'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );})}
+                    {rows.map((row, idx) => (
+                      <SheetTableRow
+                        key={`row-${idx}`}
+                        row={row}
+                        rowIndex={idx}
+                        headers={headers}
+                        visibleColumnIndices={visibleColumnIndices}
+                        jobUrlIndex={jobUrlIndex}
+                        companyIndex={companyIndex}
+                        appliedDateIndex={appliedDateIndex}
+                        status={appliedStatus[idx]}
+                        checkingIndex={checkingIndex}
+                        onCheck={handleCheckApplied}
+                        onSelectUrl={handleSelectUrl}
+                      />
+                    ))}
                   </tbody>
                 </table>
               </div>

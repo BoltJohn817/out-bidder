@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import { ErrorMessage } from '../components/ErrorMessage';
+import { EmptyState } from '../components/EmptyState';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 type TechStackCategory =
   | 'frontend'
@@ -195,7 +198,7 @@ export const ProfilePage = () => {
         </button>
       </div>
 
-      {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
+      <ErrorMessage message={error} className="mb-4" />
 
       <div className="grid gap-6 md:grid-cols-1">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
@@ -313,9 +316,14 @@ export const ProfilePage = () => {
             Refresh
           </button>
         </div>
-        {loading && <p className="text-sm text-slate-400">Loading...</p>}
+        {loading && (
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <LoadingSpinner size="sm" />
+            <span>Loading...</span>
+          </div>
+        )}
         {!loading && profiles.length === 0 && (
-          <p className="text-sm text-slate-400">No profiles yet.</p>
+          <EmptyState message="No profiles yet." />
         )}
         <ul className="space-y-2">
           {profiles.map((p) => {

@@ -21,6 +21,14 @@ def create_app() -> Flask:
     # Make Mongo client available via app
     app.mongo_client = mongo_client  # type: ignore[attr-defined]
 
+    # Create database indexes on startup (idempotent operation)
+    try:
+        from utils.db_indexes import create_indexes
+        create_indexes()
+    except Exception:
+        # Silently fail if indexes already exist or on first run
+        pass
+
     # Blueprints
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(profile_bp, url_prefix="/api/profiles")
