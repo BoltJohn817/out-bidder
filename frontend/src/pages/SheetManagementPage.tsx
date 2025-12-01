@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import api from '../api/client';
@@ -30,6 +30,10 @@ export const SheetManagementPage = () => {
   const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number; notChecked: number } | null>(
     null
   );
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentSheetIdRef = useRef<number | null>(null);
+  const requestIdRef = useRef<number>(0);
 
   const socket: Socket | null = useMemo(() => {
     // Assume backend websocket is served from same origin/port as API
@@ -111,6 +115,21 @@ export const SheetManagementPage = () => {
 
   const loadSheetValues = async (sheetId: number) => {
     if (!profileId) return;
+    
+    // Cancel any previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    // Increment request ID to track this request
+    requestIdRef.current += 1;
+    const currentRequestId = requestIdRef.current;
+    
+    // Create a new AbortController for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    currentSheetIdRef.current = sheetId;
+    
     try {
       setLoading(true);
       setError(null);
@@ -119,7 +138,15 @@ export const SheetManagementPage = () => {
         rows: string[][];
         title: string;
         statuses?: (string | null)[];
-      }>(`/profiles/${profileId}/sheets/${sheetId}`);
+      }>(`/profiles/${profileId}/sheets/${sheetId}`, {
+        signal: abortController.signal
+      });
+      
+      // Ignore response if this request was superseded or aborted
+      if (abortController.signal.aborted || currentSheetIdRef.current !== sheetId || requestIdRef.current !== currentRequestId) {
+        return;
+      }
+      
       setHeaders(res.data.headers);
       setRows(res.data.rows);
 
@@ -145,9 +172,19 @@ export const SheetManagementPage = () => {
         setBulkSummary({ applied: 0, notApplied: 0, notChecked: totalRows });
       }
     } catch (err: any) {
-      setError(err?.response?.data?.message ?? 'Failed to load sheet values');
+      // Ignore errors from aborted requests
+      if (err.name === 'CanceledError' || err.name === 'AbortError' || abortController.signal.aborted) {
+        return;
+      }
+      // Only set error if this is still the current request
+      if (currentSheetIdRef.current === sheetId && requestIdRef.current === currentRequestId) {
+        setError(err?.response?.data?.message ?? 'Failed to load sheet values');
+      }
     } finally {
-      setLoading(false);
+      // Only update loading state if this is still the current request
+      if (currentSheetIdRef.current === sheetId && requestIdRef.current === currentRequestId) {
+        setLoading(false);
+      }
     }
   };
 
@@ -159,6 +196,13 @@ export const SheetManagementPage = () => {
     if (selectedSheetId !== null) {
       void loadSheetValues(selectedSheetId);
     }
+    
+    // Cleanup: cancel any pending request when selectedSheetId changes or component unmounts
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [selectedSheetId]);
 
   useEffect(() => {
