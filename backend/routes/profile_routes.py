@@ -18,10 +18,9 @@ from models import (
     update_profile,
 )
 from gmail_utils import search_gmail_for_company
-from extensions import socketio
 import uuid
-from flask_socketio import join_room
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Thread
 from utils import (
     build_google_credentials,
     build_sheets_service,
@@ -34,6 +33,7 @@ from utils import (
     success_response,
     validation_error,
 )
+from utils.job_status_store import create_job, update_job_progress, complete_job, fail_job, get_job_status
 
 profile_bp = Blueprint("profiles", __name__)
 
@@ -475,7 +475,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     """
     Recalculate application status for all rows in a sheet.
     Ignores any cached statuses and overwrites them.
-    Returns: { statuses: [ 'applied' | 'not_applied' | null, ... ] }
+    Returns: { job_id: str } - use this to poll for status
     """
     profile = get_profile_with_credentials(current_user_id, profile_id)
     if not profile:
@@ -491,16 +491,13 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     )
 
     job_id = str(uuid.uuid4())
+    create_job(job_id)
 
     def _worker():
         try:
             creds = build_google_credentials(profile)
         except ValueError as exc:
-            socketio.emit(
-                "application_check_error",
-                {"job_id": job_id, "message": str(exc)},
-                room=job_id,
-            )
+            fail_job(job_id, str(exc))
             return
 
         service = build_sheets_service(creds)
@@ -508,11 +505,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         # Fetch sheet title
         title = get_sheet_title(service, spreadsheet_id, sheet_id)
         if not title:
-            socketio.emit(
-                "application_check_error",
-                {"job_id": job_id, "message": "Sheet not found"},
-                room=job_id,
-            )
+            fail_job(job_id, "Sheet not found")
             return
 
         # Fetch values A:G
@@ -525,11 +518,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         )
         values = res.get("values", [])
         if not values:
-            socketio.emit(
-                "application_check_complete",
-                {"job_id": job_id, "statuses": []},
-                room=job_id,
-            )
+            complete_job(job_id, [], 0, 0)
             return
 
         # Find the header row
@@ -591,36 +580,36 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             for future in as_completed(future_map):
                 idx, status = future.result()
                 statuses[idx] = status
-                socketio.emit(
-                    "application_check_progress",
-                    {"job_id": job_id, "row_index": idx, "status": status},
-                    room=job_id,
-                )
+                update_job_progress(job_id, idx, status)
 
         applied_count = sum(1 for s in statuses if s == "applied")
         not_applied_count = sum(1 for s in statuses if s == "not_applied")
 
-        socketio.emit(
-            "application_check_complete",
-            {
-                "job_id": job_id,
-                "statuses": statuses,
-                "applied_count": applied_count,
-                "not_applied_count": not_applied_count,
-            },
-            room=job_id,
-        )
+        complete_job(job_id, statuses, applied_count, not_applied_count)
 
-    socketio.start_background_task(_worker)
+    # Start background thread
+    thread = Thread(target=_worker, daemon=True)
+    thread.start()
 
     return success_response({"job_id": job_id}, 202)
 
 
-@socketio.on("join_job")
-def handle_join_job(data):
-    job_id = data.get("job_id")
-    if not job_id:
-        return
-    join_room(job_id)
+@profile_bp.get("/<profile_id>/jobs/<job_id>/status")
+@require_auth
+def get_job_status_route(current_user_id: str, profile_id: str, job_id: str):
+    """
+    Poll endpoint to check the status of a background job.
+    Returns: { status: 'running' | 'completed' | 'error', statuses?: [...], error_message?: str, ... }
+    """
+    # Verify profile ownership
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return error_response("Profile not found", 404)
+
+    job_data = get_job_status(job_id)
+    if not job_data:
+        return error_response("Job not found", 404)
+
+    return success_response(job_data)
 
 

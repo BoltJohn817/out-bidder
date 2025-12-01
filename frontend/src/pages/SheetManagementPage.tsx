@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { io, Socket } from 'socket.io-client';
 import api from '../api/client';
 import { useSheetColumns } from '../hooks/useSheetColumns';
 import { ErrorMessage } from '../components/ErrorMessage';
@@ -31,18 +30,12 @@ export const SheetManagementPage = () => {
   const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number; notChecked: number } | null>(
     null
   );
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentSheetIdRef = useRef<number | null>(null);
   const requestIdRef = useRef<number>(0);
-
-  const socket: Socket | null = useMemo(() => {
-    // Assume backend websocket is served from same origin/port as API
-    return io(import.meta.env.VITE_API_BASE_URL?.replace('/api', '') ?? 'http://localhost:5001', {
-      autoConnect: false,
-      transports: ['websocket']
-    });
-  }, []);
+  const pollingIntervalRef = useRef<number | null>(null);
   // Parse column indices using the utility hook
   const columnIndices = useSheetColumns(headers);
   const { companyIndex, positionIndex, jobUrlIndex, appliedDateIndex } = columnIndices;
@@ -200,57 +193,92 @@ export const SheetManagementPage = () => {
     };
   }, [selectedSheetId]);
 
+  // Polling effect for job status
   useEffect(() => {
-    if (!socket) return;
-    socket.connect();
+    if (!bulkChecking || !currentJobId || !profileId) {
+      return;
+    }
 
-    socket.on('connect_error', () => {
-      // Silently ignore for now; page will still work without live updates
-    });
+    const pollJobStatus = async () => {
+      try {
+        const res = await api.get<{
+          status: 'running' | 'completed' | 'error';
+          statuses?: (string | null)[];
+          statuses_dict?: Record<number, string>;
+          error_message?: string;
+          applied_count?: number;
+          not_applied_count?: number;
+        }>(`/profiles/${profileId}/jobs/${currentJobId}/status`);
 
-    socket.on('application_check_progress', (payload: any) => {
-      const { job_id, row_index, status } = payload;
-      setAppliedStatus((prev) => {
-        if (status === 'applied' || status === 'not_applied') {
-          return { ...prev, [row_index]: status };
-        }
-        return prev;
-      });
-    });
+        const jobData = res.data;
 
-    socket.on('application_check_complete', (payload: any) => {
-      const { statuses } = payload;
-      if (Array.isArray(statuses)) {
-        const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
-        statuses.forEach((s: string | null, idx: number) => {
-          if (s === 'applied' || s === 'not_applied') {
-            statusMap[idx] = s;
+        if (jobData.status === 'running') {
+          // Update progress from statuses_dict if available
+          if (jobData.statuses_dict) {
+            setAppliedStatus((prev) => {
+              const updated = { ...prev };
+              Object.entries(jobData.statuses_dict!).forEach(([idx, status]) => {
+                const rowIndex = parseInt(idx, 10);
+                if (status === 'applied' || status === 'not_applied') {
+                  updated[rowIndex] = status;
+                }
+              });
+              return updated;
+            });
           }
-        });
-        setAppliedStatus(statusMap);
+        } else if (jobData.status === 'completed') {
+          // Job completed, update final statuses
+          if (Array.isArray(jobData.statuses)) {
+            const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+            jobData.statuses.forEach((s: string | null, idx: number) => {
+              if (s === 'applied' || s === 'not_applied') {
+                statusMap[idx] = s;
+              }
+            });
+            setAppliedStatus(statusMap);
 
-        // Recompute summary based only on rows we actually render
-        const appliedCount = Object.values(statusMap).filter((s) => s === 'applied').length;
-        const notAppliedCount = Object.values(statusMap).filter((s) => s === 'not_applied').length;
-        const notChecked = Math.max(rows.length - appliedCount - notAppliedCount, 0);
-        setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
-      } else {
-        setBulkSummary(null);
+            // Recompute summary
+            const appliedCount = jobData.applied_count ?? Object.values(statusMap).filter((s) => s === 'applied').length;
+            const notAppliedCount = jobData.not_applied_count ?? Object.values(statusMap).filter((s) => s === 'not_applied').length;
+            const notChecked = Math.max(rows.length - appliedCount - notAppliedCount, 0);
+            setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
+          }
+          setBulkChecking(false);
+          setCurrentJobId(null);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        } else if (jobData.status === 'error') {
+          // Job failed
+          setError(jobData.error_message ?? 'Background check failed');
+          setBulkChecking(false);
+          setBulkSummary(null);
+          setCurrentJobId(null);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        }
+      } catch (err: any) {
+        // Ignore polling errors, will retry on next interval
+        console.error('Error polling job status:', err);
       }
-      setBulkChecking(false);
-    });
+    };
 
-    socket.on('application_check_error', (payload: any) => {
-      setError(payload?.message ?? 'Background check failed');
-      setBulkChecking(false);
-      setBulkSummary(null);
-    });
+    // Poll every 1 second
+    pollingIntervalRef.current = window.setInterval(pollJobStatus, 1000);
+    
+    // Initial poll
+    pollJobStatus();
 
     return () => {
-      socket.disconnect();
-      socket.removeAllListeners();
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
     };
-  }, [socket]);
+  }, [bulkChecking, currentJobId, profileId, rows.length]);
 
   return (
     <div>
@@ -327,7 +355,7 @@ export const SheetManagementPage = () => {
               <button
                 type="button"
                 onClick={async () => {
-                  if (!profileId || selectedSheetId === null || !socket) return;
+                  if (!profileId || selectedSheetId === null) return;
                   try {
                     setBulkChecking(true);
                     setError(null);
@@ -337,16 +365,28 @@ export const SheetManagementPage = () => {
                       `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
                     );
                     const jobId = res.data.job_id;
-                    socket.emit('join_job', { job_id: jobId });
+                    setCurrentJobId(jobId);
 
+                    // Set a timeout as fallback (60 seconds)
                     setTimeout(() => {
-                      setBulkChecking(false);
+                      setCurrentJobId((prevJobId) => {
+                        if (prevJobId === jobId) {
+                          setBulkChecking(false);
+                          if (pollingIntervalRef.current) {
+                            clearInterval(pollingIntervalRef.current);
+                            pollingIntervalRef.current = null;
+                          }
+                          return null;
+                        }
+                        return prevJobId;
+                      });
                     }, 60000);
                   } catch (err: any) {
                     setError(
                       err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'
                     );
                     setBulkChecking(false);
+                    setCurrentJobId(null);
                   }
                 }}
                 className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"

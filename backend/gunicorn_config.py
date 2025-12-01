@@ -1,4 +1,4 @@
-"""Gunicorn configuration file for Flask-SocketIO application."""
+"""Gunicorn configuration file for Flask application."""
 
 import multiprocessing
 import os
@@ -21,9 +21,7 @@ else:
     # For local dev with more resources, set GUNICORN_WORKERS env var
     workers = 2
 
-worker_class = "gevent"  # Required for Flask-SocketIO
-# Reduced worker_connections for memory efficiency on Railway
-worker_connections = int(os.getenv("GUNICORN_WORKER_CONNECTIONS", "100"))
+worker_class = "sync"  # Standard sync workers (no longer using SocketIO)
 timeout = 30
 keepalive = 2
 # Restart workers periodically to prevent memory leaks

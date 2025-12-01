@@ -8,8 +8,5 @@ google-auth==2.36.0
 google-auth-oauthlib==1.2.1
 google-api-python-client==2.154.0
 
-flask-socketio==5.3.6
 gunicorn==23.0.0
-gevent>=25.9.1
-gevent-websocket==0.10.1
 psutil==6.1.1

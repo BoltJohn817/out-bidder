@@ -1,13 +1,11 @@
 from flask import Flask
 from flask_bcrypt import Bcrypt
-from flask_socketio import SocketIO
 from pymongo import MongoClient
 import jwt
 
 from config import Config
 
 bcrypt = Bcrypt()
-socketio = SocketIO(async_mode="gevent", cors_allowed_origins="*")
 
 
 class JWTManager:
