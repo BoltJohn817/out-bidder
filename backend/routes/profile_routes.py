@@ -385,9 +385,27 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
             200,
         )
 
-    # Treat the first row as headers, remaining rows as data.
-    raw_headers = values[0]
-    data_rows = values[1:]
+    # Find the header row by searching for expected column names
+    def _find_header_row(rows: list[list[str]]) -> int:
+        """Find the row that contains the expected column headers."""
+        expected_keywords = ["company", "position"]
+        for idx, row in enumerate(rows):
+            row_lower = [str(cell).lower() for cell in row]
+            # Check if this row contains the expected keywords
+            has_company = any("company" in cell for cell in row_lower)
+            has_position = any("position" in cell for cell in row_lower)
+            has_url = any("job url" in cell or "url" in cell for cell in row_lower)
+            
+            # If we find at least 2 out of 3 expected columns, consider this the header row
+            matches = sum([has_company, has_position, has_url])
+            if matches >= 2:
+                return idx
+        # Fallback to first row if no header row found
+        return 0
+
+    header_row_idx = _find_header_row(values)
+    raw_headers = values[header_row_idx]
+    data_rows = values[header_row_idx + 1:]
 
     # Only look at columns A–G (0–6)
     headers = (raw_headers + [""] * 7)[:7]
@@ -574,8 +592,28 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             )
             return
 
-        headers = (values[0] + [""] * 7)[:7]
-        data_rows = values[1:]
+        # Find the header row by searching for expected column names
+        def _find_header_row(rows: list[list[str]]) -> int:
+            """Find the row that contains the expected column headers."""
+            expected_keywords = ["company", "date", "position"]
+            for idx, row in enumerate(rows):
+                row_lower = [str(cell).lower() for cell in row]
+                # Check if this row contains the expected keywords
+                has_company = any("company" in cell for cell in row_lower)
+                has_date = any("date" in cell for cell in row_lower)
+                has_position = any("position" in cell for cell in row_lower)
+                has_url = any("job url" in cell or "url" in cell for cell in row_lower)
+                
+                # If we find at least 3 out of 4 expected columns, consider this the header row
+                matches = sum([has_company, has_date, has_position, has_url])
+                if matches >= 3:
+                    return idx
+            # Fallback to first row if no header row found
+            return 0
+
+        header_row_idx = _find_header_row(values)
+        headers = (values[header_row_idx] + [""] * 7)[:7]
+        data_rows = values[header_row_idx + 1:]
 
         # Detect relevant columns by header names
         def _find_index(predicate, default: int) -> int:

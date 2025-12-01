@@ -56,7 +56,7 @@ export const SheetManagementPage = () => {
     headers.findIndex((h) => h.toLowerCase().includes('position')) !== -1
       ? headers.findIndex((h) => h.toLowerCase().includes('position'))
       : 0;
-  const visibleColumnIndices = [appliedDateIndex, companyIndex, positionIndex, jobUrlIndex];
+  const visibleColumnIndices = Array.from(new Set([appliedDateIndex, companyIndex, positionIndex, jobUrlIndex]));
 
   const handleCheckApplied = async (rowIndex: number) => {
     if (!profileId) return;
@@ -257,6 +257,8 @@ export const SheetManagementPage = () => {
                   setBulkSummary(null);
                   setCheckingIndex(null);
                   setSelectedJobUrl(null);
+                  setHeaders([]);
+                  setRows([]);
                   setError(null);
                 }}
                 className={`px-3 py-2 rounded-lg cursor-pointer ${
@@ -335,7 +337,7 @@ export const SheetManagementPage = () => {
                     <tr>
                       {visibleColumnIndices.map((idx) => (
                         <th
-                          key={idx}
+                          key={`${idx}-${headers[idx]}`}
                           className="px-3 py-2 text-left font-semibold border-b border-slate-700"
                         >
                           {headers[idx]}
@@ -362,7 +364,7 @@ export const SheetManagementPage = () => {
 
                       return (
                         <tr
-                          key={idx}
+                        key={`${idx}-${headers[idx]}`}
                           className={`${baseColor} cursor-pointer hover:bg-slate-800/70`}
                           onClick={() => {
                             const url = row[jobUrlIndex];
@@ -406,8 +408,8 @@ export const SheetManagementPage = () => {
                                 e.stopPropagation();
                                 void handleCheckApplied(idx);
                               }}
-                              className="text-xs text-sky-400 hover:text-sky-300"
-                              disabled={checkingIndex === idx}
+                              className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
+                              disabled={checkingIndex === idx || !row[companyIndex] || !row[appliedDateIndex]}
                             >
                               {checkingIndex === idx ? 'Checking...' : 'Check'}
                             </button>
