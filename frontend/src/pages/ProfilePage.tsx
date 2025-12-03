@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { normalizeSpreadsheetInput } from '../utils/spreadsheet';
 
 type TechStackCategory =
   | 'frontend'
@@ -234,7 +235,12 @@ export const ProfilePage = () => {
             <input
               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
               value={form.spreadsheetId}
-              onChange={(e) => setForm({ ...form, spreadsheetId: e.target.value })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  spreadsheetId: normalizeSpreadsheetInput(e.target.value)
+                })
+              }
             />
           </div>
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
