@@ -366,21 +366,6 @@ export const SheetManagementPage = () => {
                     );
                     const jobId = res.data.job_id;
                     setCurrentJobId(jobId);
-
-                    // Set a timeout as fallback (60 seconds)
-                    setTimeout(() => {
-                      setCurrentJobId((prevJobId) => {
-                        if (prevJobId === jobId) {
-                          setBulkChecking(false);
-                          if (pollingIntervalRef.current) {
-                            clearInterval(pollingIntervalRef.current);
-                            pollingIntervalRef.current = null;
-                          }
-                          return null;
-                        }
-                        return prevJobId;
-                      });
-                    }, 60000);
                   } catch (err: any) {
                     setError(
                       err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'

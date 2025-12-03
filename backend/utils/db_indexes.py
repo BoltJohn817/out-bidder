@@ -40,6 +40,13 @@ def create_indexes():
     applications_collection.create_index([("owner_user_id", 1), ("profile_id", 1), ("row_index", 1)])
     applications_collection.create_index("updated_at")
 
+    # Job statuses collection indexes
+    job_statuses_collection = db["job_statuses"]
+    job_statuses_collection.create_index("job_id", unique=True)
+    job_statuses_collection.create_index([("owner_user_id", 1), ("profile_id", 1)])
+    job_statuses_collection.create_index("created_at")
+    job_statuses_collection.create_index("updated_at")
+
     print("Database indexes created successfully")
 
 

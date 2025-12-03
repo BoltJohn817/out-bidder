@@ -291,3 +291,172 @@ def clear_application_statuses_for_sheet(
     )
 
 
+def job_statuses_collection():
+    """Return the job_statuses collection."""
+    return db["job_statuses"]
+
+
+def create_job_status(
+    job_id: str,
+    owner_user_id: str,
+    profile_id: str,
+) -> None:
+    """Initialize a new job status in MongoDB."""
+    job_statuses_collection().insert_one(
+        {
+            "job_id": job_id,
+            "owner_user_id": owner_user_id,
+            "profile_id": ObjectId(profile_id),
+            "status": "running",
+            # Store per-row statuses in a sparse dict: row_index -> status
+            "statuses_dict": {},
+            "error_message": None,
+            "applied_count": 0,
+            "not_applied_count": 0,
+            "created_at": _now(),
+            "updated_at": _now(),
+        }
+    )
+
+
+def update_job_progress(
+    job_id: str,
+    row_index: int,
+    status: str | None,
+) -> None:
+    """
+    Update progress for a specific row in a job.
+
+    Also keeps `applied_count` and `not_applied_count` in sync so callers
+    don't need to recompute counts separately.
+    """
+    doc = job_statuses_collection().find_one(
+        {"job_id": job_id},
+        {"statuses_dict": 1, "applied_count": 1, "not_applied_count": 1},
+    )
+    if not doc:
+        return
+
+    statuses_dict: Dict[str, Any] = doc.get("statuses_dict", {}) or {}
+    applied_count = int(doc.get("applied_count", 0) or 0)
+    not_applied_count = int(doc.get("not_applied_count", 0) or 0)
+
+    key = str(row_index)
+    old_status = statuses_dict.get(key)
+
+    # Adjust counts for the old status
+    if old_status == "applied":
+        applied_count -= 1
+    elif old_status == "not_applied":
+        not_applied_count -= 1
+
+    # Adjust counts for the new status
+    if status == "applied":
+        applied_count += 1
+    elif status == "not_applied":
+        not_applied_count += 1
+
+    set_fields: Dict[str, Any] = {
+        "updated_at": _now(),
+        "applied_count": applied_count,
+        "not_applied_count": not_applied_count,
+    }
+    unset_fields: Dict[str, Any] = {}
+
+    if status is not None:
+        set_fields[f"statuses_dict.{key}"] = status
+    else:
+        # Clear the entry if status is None
+        unset_fields[f"statuses_dict.{key}"] = ""
+
+    update: Dict[str, Any] = {"$set": set_fields}
+    if unset_fields:
+        update["$unset"] = unset_fields
+
+    job_statuses_collection().update_one({"job_id": job_id}, update)
+
+
+def complete_job(
+    job_id: str,
+    statuses: list[str | None],
+    applied_count: int,
+    not_applied_count: int,
+) -> None:
+    """Mark a job as completed with final statuses."""
+
+    # Convert list into the sparse dict representation we store in MongoDB
+    statuses_dict: Dict[str, Any] = {
+        str(i): s for i, s in enumerate(statuses) if s is not None
+    }
+
+    job_statuses_collection().update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "status": "completed",
+                "statuses_dict": statuses_dict,
+                "applied_count": applied_count,
+                "not_applied_count": not_applied_count,
+                "updated_at": _now(),
+            }
+        }
+    )
+
+
+def fail_job(job_id: str, error_message: str) -> None:
+    """Mark a job as failed with an error message."""
+    job_statuses_collection().update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "status": "error",
+                "error_message": error_message,
+                "updated_at": _now(),
+            }
+        }
+    )
+
+
+def get_job_status(job_id: str) -> Dict[str, Any] | None:
+    """Get the current status of a job."""
+    doc = job_statuses_collection().find_one({"job_id": job_id})
+    if not doc:
+        return None
+
+    status = doc.get("status", "running")
+
+    # Base fields always returned
+    result: Dict[str, Any] = {
+        "status": status,
+        "error_message": doc.get("error_message"),
+        "applied_count": doc.get("applied_count", 0),
+        "not_applied_count": doc.get("not_applied_count", 0),
+    }
+
+    statuses_dict: Dict[str, Any] = doc.get("statuses_dict", {}) or {}
+
+    if status == "running":
+        # For running jobs, expose the sparse dict so the frontend can
+        # progressively update row statuses.
+        if statuses_dict:
+            result["statuses_dict"] = statuses_dict
+    elif status == "completed":
+        # For completed jobs, expose a dense list to match the existing API.
+        if statuses_dict:
+            # Keys are indices as strings; build a list up to the max index.
+            indices = [int(k) for k in statuses_dict.keys()]
+            max_index = max(indices)
+            statuses_list: list[Any] = [None] * (max_index + 1)
+            for k, v in statuses_dict.items():
+                idx = int(k)
+                statuses_list[idx] = v
+            result["statuses"] = statuses_list
+
+    return result
+
+
+def delete_job_status(job_id: str) -> None:
+    """Remove a job status from MongoDB (cleanup)."""
+    job_statuses_collection().delete_one({"job_id": job_id})
+
+

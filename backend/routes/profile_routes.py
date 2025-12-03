@@ -491,7 +491,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     )
 
     job_id = str(uuid.uuid4())
-    create_job(job_id)
+    create_job(job_id, current_user_id, profile_id)
 
     def _worker():
         try:
@@ -543,6 +543,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
             # Skip rows missing any required field
             if not company or not applied_date or not position or not job_url:
+                update_job_progress(job_id, idx, None)
                 return idx, None
 
             try:
@@ -553,6 +554,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
                     applied_time=None,
                 )
             except Exception:
+                update_job_progress(job_id, idx, None)
                 return idx, None
 
             status_str = "applied" if applied else "not_applied"
@@ -569,6 +571,8 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
                 applied_date=applied_date,
                 status=status_str,
             )
+
+            update_job_progress(job_id, idx, status_str)
             return idx, status_str
 
         with ThreadPoolExecutor(max_workers=16) as executor:
@@ -580,7 +584,6 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             for future in as_completed(future_map):
                 idx, status = future.result()
                 statuses[idx] = status
-                update_job_progress(job_id, idx, status)
 
         applied_count = sum(1 for s in statuses if s == "applied")
         not_applied_count = sum(1 for s in statuses if s == "not_applied")
