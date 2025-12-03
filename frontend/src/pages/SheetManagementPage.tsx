@@ -25,11 +25,16 @@ export const SheetManagementPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedJobUrl, setSelectedJobUrl] = useState<string | null>(null);
   const [checkingIndex, setCheckingIndex] = useState<number | null>(null);
-  const [appliedStatus, setAppliedStatus] = useState<Record<number, 'applied' | 'not_applied' | 'error'>>({});
+  const [appliedStatus, setAppliedStatus] = useState<
+    Record<number, 'applied' | 'not_applied' | 'duplicate' | 'error'>
+  >({});
   const [bulkChecking, setBulkChecking] = useState(false);
-  const [bulkSummary, setBulkSummary] = useState<{ applied: number; notApplied: number; notChecked: number } | null>(
-    null
-  );
+  const [bulkSummary, setBulkSummary] = useState<{
+    applied: number;
+    notApplied: number;
+    duplicate: number;
+    notChecked: number;
+  } | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -140,9 +145,10 @@ export const SheetManagementPage = () => {
 
       const totalRows = res.data.rows.length;
       if (res.data.statuses && Array.isArray(res.data.statuses)) {
-        const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+        const statusMap: Record<number, 'applied' | 'not_applied' | 'duplicate' | 'error'> = {};
         let appliedCount = 0;
         let notAppliedCount = 0;
+        let duplicateCount = 0;
         res.data.statuses.forEach((s, idx) => {
           if (s === 'applied') {
             statusMap[idx] = 'applied';
@@ -150,14 +156,22 @@ export const SheetManagementPage = () => {
           } else if (s === 'not_applied') {
             statusMap[idx] = 'not_applied';
             notAppliedCount += 1;
+          } else if (s === 'duplicate') {
+            statusMap[idx] = 'duplicate';
+            duplicateCount += 1;
           }
         });
         setAppliedStatus(statusMap);
-        const notChecked = Math.max(totalRows - appliedCount - notAppliedCount, 0);
-        setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
+        const notChecked = Math.max(totalRows - appliedCount - notAppliedCount - duplicateCount, 0);
+        setBulkSummary({
+          applied: appliedCount,
+          notApplied: notAppliedCount,
+          duplicate: duplicateCount,
+          notChecked,
+        });
       } else {
         setAppliedStatus({});
-        setBulkSummary({ applied: 0, notApplied: 0, notChecked: totalRows });
+        setBulkSummary({ applied: 0, notApplied: 0, duplicate: 0, notChecked: totalRows });
       }
     } catch (err: any) {
       // Ignore errors from aborted requests
@@ -208,6 +222,7 @@ export const SheetManagementPage = () => {
           error_message?: string;
           applied_count?: number;
           not_applied_count?: number;
+          duplicate_count?: number;
         }>(`/profiles/${profileId}/jobs/${currentJobId}/status`);
 
         const jobData = res.data;
@@ -219,8 +234,8 @@ export const SheetManagementPage = () => {
               const updated = { ...prev };
               Object.entries(jobData.statuses_dict!).forEach(([idx, status]) => {
                 const rowIndex = parseInt(idx, 10);
-                if (status === 'applied' || status === 'not_applied') {
-                  updated[rowIndex] = status;
+                if (status === 'applied' || status === 'not_applied' || status === 'duplicate') {
+                  updated[rowIndex] = status as 'applied' | 'not_applied' | 'duplicate';
                 }
               });
               return updated;
@@ -229,19 +244,28 @@ export const SheetManagementPage = () => {
         } else if (jobData.status === 'completed') {
           // Job completed, update final statuses
           if (Array.isArray(jobData.statuses)) {
-            const statusMap: Record<number, 'applied' | 'not_applied' | 'error'> = {};
+            const statusMap: Record<number, 'applied' | 'not_applied' | 'duplicate' | 'error'> = {};
             jobData.statuses.forEach((s: string | null, idx: number) => {
-              if (s === 'applied' || s === 'not_applied') {
+              if (s === 'applied' || s === 'not_applied' || s === 'duplicate') {
                 statusMap[idx] = s;
               }
             });
             setAppliedStatus(statusMap);
 
             // Recompute summary
-            const appliedCount = jobData.applied_count ?? Object.values(statusMap).filter((s) => s === 'applied').length;
-            const notAppliedCount = jobData.not_applied_count ?? Object.values(statusMap).filter((s) => s === 'not_applied').length;
-            const notChecked = Math.max(rows.length - appliedCount - notAppliedCount, 0);
-            setBulkSummary({ applied: appliedCount, notApplied: notAppliedCount, notChecked });
+            const appliedCount =
+              jobData.applied_count ?? Object.values(statusMap).filter((s) => s === 'applied').length;
+            const notAppliedCount =
+              jobData.not_applied_count ?? Object.values(statusMap).filter((s) => s === 'not_applied').length;
+            const duplicateCount =
+              jobData.duplicate_count ?? Object.values(statusMap).filter((s) => s === 'duplicate').length;
+            const notChecked = Math.max(rows.length - appliedCount - notAppliedCount - duplicateCount, 0);
+            setBulkSummary({
+              applied: appliedCount,
+              notApplied: notAppliedCount,
+              duplicate: duplicateCount,
+              notChecked,
+            });
           }
           setBulkChecking(false);
           setCurrentJobId(null);
@@ -386,6 +410,8 @@ export const SheetManagementPage = () => {
                 <span className="text-emerald-400 font-semibold">{bulkSummary.applied}</span>{' '}
                 · Not found:{' '}
                 <span className="text-red-300 font-semibold">{bulkSummary.notApplied}</span>{' '}
+                · Duplicated:{' '}
+                <span className="text-amber-300 font-semibold">{bulkSummary.duplicate}</span>{' '}
                 · Not checked yet:{' '}
                 <span className="text-slate-200 font-semibold">{bulkSummary.notChecked}</span>
               </p>

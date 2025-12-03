@@ -535,6 +535,12 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
         statuses: list[str | None] = [None] * len(data_rows)
 
+        # Track seen URLs so duplicate postings can be marked without re-checking Gmail
+        from threading import Lock
+
+        seen_urls: dict[str, int] = {}
+        seen_urls_lock = Lock()
+
         def process_row(idx: int, padded_row: list[str]) -> tuple[int, str | None]:
             company = padded_row[company_idx]
             applied_date = padded_row[date_idx]
@@ -545,6 +551,28 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             if not company or not applied_date or not position or not job_url:
                 update_job_progress(job_id, idx, None)
                 return idx, None
+
+            # If this URL has already been processed for this job, mark as duplicate
+            with seen_urls_lock:
+                if job_url in seen_urls:
+                    status_str = "duplicate"
+                    # Mark duplicate in DB and job progress, no Gmail call needed
+                    upsert_application_status(
+                        owner_user_id=current_user_id,
+                        profile_id=profile_id,
+                        spreadsheet_id=spreadsheet_id,
+                        sheet_id=sheet_id,
+                        row_index=idx,
+                        company_name=company,
+                        position=position,
+                        job_url=job_url,
+                        applied_date=applied_date,
+                        status=status_str,
+                    )
+                    update_job_progress(job_id, idx, status_str)
+                    return idx, status_str
+                # First time we've seen this URL; remember it
+                seen_urls[job_url] = idx
 
             try:
                 applied = search_gmail_for_company(
@@ -586,9 +614,10 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
                 statuses[idx] = status
 
         applied_count = sum(1 for s in statuses if s == "applied")
+        duplicate_count = sum(1 for s in statuses if s == "duplicate")
         not_applied_count = sum(1 for s in statuses if s == "not_applied")
 
-        complete_job(job_id, statuses, applied_count, not_applied_count)
+        complete_job(job_id, statuses, applied_count, not_applied_count, duplicate_count)
 
     # Start background thread
     thread = Thread(target=_worker, daemon=True)

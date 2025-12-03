@@ -27,9 +27,10 @@ def complete_job(
     statuses: list[Optional[str]],
     applied_count: int,
     not_applied_count: int,
+    duplicate_count: int,
 ) -> None:
     """Mark a job as completed with final statuses."""
-    _complete_job(job_id, statuses, applied_count, not_applied_count)
+    _complete_job(job_id, statuses, applied_count, not_applied_count, duplicate_count)
 
 
 def fail_job(job_id: str, error_message: str) -> None:

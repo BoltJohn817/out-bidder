@@ -8,13 +8,14 @@ interface SheetTableRowProps {
   jobUrlIndex: number;
   companyIndex: number;
   appliedDateIndex: number;
-  status?: 'applied' | 'not_applied' | 'error';
+  status?: 'applied' | 'not_applied' | 'error' | 'duplicate';
   checkingIndex: number | null;
   onCheck: (rowIndex: number) => void;
   onSelectUrl: (url: string) => void;
 }
 
-export const SheetTableRow = memo<SheetTableRowProps>(({
+export const SheetTableRow = memo<SheetTableRowProps>(
+({
   row,
   rowIndex,
   headers,
@@ -32,11 +33,13 @@ export const SheetTableRow = memo<SheetTableRowProps>(({
       ? 'bg-emerald-900/40'
       : status === 'not_applied'
         ? 'bg-red-900/20'
-        : status === 'error'
-          ? 'bg-red-900/40'
-          : rowIndex % 2 === 0
-            ? 'bg-slate-950'
-            : 'bg-slate-900';
+        : status === 'duplicate'
+          ? 'bg-amber-900/30'
+          : status === 'error'
+            ? 'bg-red-900/40'
+            : rowIndex % 2 === 0
+              ? 'bg-slate-950'
+              : 'bg-slate-900';
 
   const handleRowClick = () => {
     const url = row[jobUrlIndex];
@@ -83,6 +86,9 @@ export const SheetTableRow = memo<SheetTableRowProps>(({
         )}
         {status === 'error' && (
           <span className="text-red-400 text-xs">Error</span>
+        )}
+        {status === 'duplicate' && (
+          <span className="text-amber-300 text-xs font-semibold">Duplicate</span>
         )}
         {!status && (
           <button

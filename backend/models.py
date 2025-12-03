@@ -313,6 +313,7 @@ def create_job_status(
             "error_message": None,
             "applied_count": 0,
             "not_applied_count": 0,
+            "duplicate_count": 0,
             "created_at": _now(),
             "updated_at": _now(),
         }
@@ -332,7 +333,7 @@ def update_job_progress(
     """
     doc = job_statuses_collection().find_one(
         {"job_id": job_id},
-        {"statuses_dict": 1, "applied_count": 1, "not_applied_count": 1},
+        {"statuses_dict": 1, "applied_count": 1, "not_applied_count": 1, "duplicate_count": 1},
     )
     if not doc:
         return
@@ -340,7 +341,7 @@ def update_job_progress(
     statuses_dict: Dict[str, Any] = doc.get("statuses_dict", {}) or {}
     applied_count = int(doc.get("applied_count", 0) or 0)
     not_applied_count = int(doc.get("not_applied_count", 0) or 0)
-
+    duplicate_count = int(doc.get("duplicate_count", 0) or 0)
     key = str(row_index)
     old_status = statuses_dict.get(key)
 
@@ -349,17 +350,22 @@ def update_job_progress(
         applied_count -= 1
     elif old_status == "not_applied":
         not_applied_count -= 1
+    elif old_status == "duplicate":
+        duplicate_count -= 1
 
     # Adjust counts for the new status
     if status == "applied":
         applied_count += 1
     elif status == "not_applied":
         not_applied_count += 1
+    elif status == "duplicate":
+        duplicate_count += 1
 
     set_fields: Dict[str, Any] = {
         "updated_at": _now(),
         "applied_count": applied_count,
         "not_applied_count": not_applied_count,
+        "duplicate_count": duplicate_count,
     }
     unset_fields: Dict[str, Any] = {}
 
@@ -381,6 +387,7 @@ def complete_job(
     statuses: list[str | None],
     applied_count: int,
     not_applied_count: int,
+    duplicate_count: int,
 ) -> None:
     """Mark a job as completed with final statuses."""
 
@@ -397,6 +404,7 @@ def complete_job(
                 "statuses_dict": statuses_dict,
                 "applied_count": applied_count,
                 "not_applied_count": not_applied_count,
+                "duplicate_count": duplicate_count,
                 "updated_at": _now(),
             }
         }
@@ -430,6 +438,7 @@ def get_job_status(job_id: str) -> Dict[str, Any] | None:
         "status": status,
         "error_message": doc.get("error_message"),
         "applied_count": doc.get("applied_count", 0),
+        "duplicate_count": doc.get("duplicate_count", 0),
         "not_applied_count": doc.get("not_applied_count", 0),
     }
 
