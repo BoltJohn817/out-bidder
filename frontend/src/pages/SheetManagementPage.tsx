@@ -36,6 +36,8 @@ export const SheetManagementPage = () => {
     notChecked: number;
   } | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [batchStartRow, setBatchStartRow] = useState<number>(1);
+  const [batchEndRow, setBatchEndRow] = useState<number>(1);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentSheetIdRef = useRef<number | null>(null);
@@ -207,6 +209,17 @@ export const SheetManagementPage = () => {
     };
   }, [selectedSheetId]);
 
+  // Update batch range when rows change
+  useEffect(() => {
+    if (rows.length > 0) {
+      setBatchStartRow(1);
+      setBatchEndRow(rows.length);
+    } else {
+      setBatchStartRow(1);
+      setBatchEndRow(1);
+    }
+  }, [rows.length]);
+
   // Polling effect for job status
   useEffect(() => {
     if (!bulkChecking || !currentJobId || !profileId) {
@@ -376,33 +389,104 @@ export const SheetManagementPage = () => {
               <p className="text-xs text-slate-400">
                 Date, Company, Position, Job Url and application status.
               </p>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!profileId || selectedSheetId === null) return;
-                  try {
-                    setBulkChecking(true);
-                    setError(null);
-                    setBulkSummary(null);
-                    setAppliedStatus({});
-                    const res = await api.post<{ job_id: string }>(
-                      `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
-                    );
-                    const jobId = res.data.job_id;
-                    setCurrentJobId(jobId);
-                  } catch (err: any) {
-                    setError(
-                      err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'
-                    );
-                    setBulkChecking(false);
-                    setCurrentJobId(null);
-                  }
-                }}
-                className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
-                disabled={bulkChecking || rows.length === 0}
-              >
-                {bulkChecking ? 'Checking all…' : 'Check all applications'}
-              </button>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-400">Range:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={rows.length}
+                    value={batchStartRow}
+                    onChange={(e) => {
+                      const val = Math.max(1, Math.min(rows.length, parseInt(e.target.value) || 1));
+                      setBatchStartRow(val);
+                      if (val > batchEndRow) {
+                        setBatchEndRow(val);
+                      }
+                    }}
+                    className="w-16 px-2 py-1 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200"
+                    disabled={bulkChecking || rows.length === 0}
+                  />
+                  <span className="text-xs text-slate-400">to</span>
+                  <input
+                    type="number"
+                    min={batchStartRow}
+                    max={rows.length}
+                    value={batchEndRow}
+                    onChange={(e) => {
+                      const val = Math.max(batchStartRow, Math.min(rows.length, parseInt(e.target.value) || batchStartRow));
+                      setBatchEndRow(val);
+                    }}
+                    className="w-16 px-2 py-1 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200"
+                    disabled={bulkChecking || rows.length === 0}
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!profileId || selectedSheetId === null) return;
+                      try {
+                        setBulkChecking(true);
+                        setError(null);
+                        setBulkSummary(null);
+                        // Clear statuses for the range being checked
+                        setAppliedStatus((prev) => {
+                          const updated = { ...prev };
+                          for (let i = batchStartRow - 1; i < batchEndRow; i++) {
+                            delete updated[i];
+                          }
+                          return updated;
+                        });
+                        const res = await api.post<{ job_id: string }>(
+                          `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-batch`,
+                          {
+                            start_row: batchStartRow - 1,
+                            end_row: batchEndRow - 1
+                          }
+                        );
+                        const jobId = res.data.job_id;
+                        setCurrentJobId(jobId);
+                      } catch (err: any) {
+                        setError(
+                          err?.response?.data?.message ?? 'Failed to start Gmail check for selected range'
+                        );
+                        setBulkChecking(false);
+                        setCurrentJobId(null);
+                      }
+                    }}
+                    className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
+                    disabled={bulkChecking || rows.length === 0 || batchStartRow > batchEndRow}
+                  >
+                    {bulkChecking ? 'Checking…' : 'Check range'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!profileId || selectedSheetId === null) return;
+                    try {
+                      setBulkChecking(true);
+                      setError(null);
+                      setBulkSummary(null);
+                      setAppliedStatus({});
+                      const res = await api.post<{ job_id: string }>(
+                        `/profiles/${profileId}/sheets/${selectedSheetId}/gmail/check-all`
+                      );
+                      const jobId = res.data.job_id;
+                      setCurrentJobId(jobId);
+                    } catch (err: any) {
+                      setError(
+                        err?.response?.data?.message ?? 'Failed to start Gmail check for all positions'
+                      );
+                      setBulkChecking(false);
+                      setCurrentJobId(null);
+                    }
+                  }}
+                  className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
+                  disabled={bulkChecking || rows.length === 0}
+                >
+                  {bulkChecking ? 'Checking all…' : 'Check all applications'}
+                </button>
+              </div>
             </div>
             {bulkSummary && (
               <p className="text-xs text-slate-300 mb-1">

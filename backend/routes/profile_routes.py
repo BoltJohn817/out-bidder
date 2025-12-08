@@ -626,6 +626,196 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     return success_response({"job_id": job_id}, 202)
 
 
+@profile_bp.post("/<profile_id>/sheets/<int:sheet_id>/gmail/check-batch")
+@require_auth
+def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sheet_id: int):
+    """
+    Recalculate application status for a range of rows in a sheet.
+    Ignores any cached statuses and overwrites them for the specified range.
+    Body: { start_row: int, end_row: int } (0-based indices)
+    Returns: { job_id: str } - use this to poll for status
+    """
+    data = request.get_json(silent=True) or {}
+    start_row = data.get("start_row")
+    end_row = data.get("end_row")
+
+    if start_row is None or end_row is None:
+        missing = []
+        if start_row is None:
+            missing.append("start_row")
+        if end_row is None:
+            missing.append("end_row")
+        return validation_error(missing)
+
+    if not isinstance(start_row, int) or not isinstance(end_row, int):
+        return error_response("start_row and end_row must be integers")
+
+    if start_row < 0 or end_row < 0:
+        return error_response("start_row and end_row must be non-negative")
+
+    if start_row > end_row:
+        return error_response("start_row must be less than or equal to end_row")
+
+    profile = get_profile_with_credentials(current_user_id, profile_id)
+    if not profile:
+        return error_response("Profile not found", 404)
+
+    spreadsheet_id = profile.get("spreadsheet_id")
+
+    job_id = str(uuid.uuid4())
+    create_job(job_id, current_user_id, profile_id)
+
+    def _worker():
+        try:
+            creds = build_google_credentials(profile)
+        except ValueError as exc:
+            fail_job(job_id, str(exc))
+            return
+
+        service = build_sheets_service(creds)
+
+        # Fetch sheet title
+        title = get_sheet_title(service, spreadsheet_id, sheet_id)
+        if not title:
+            fail_job(job_id, "Sheet not found")
+            return
+
+        # Fetch values A:G
+        range_a_g = f"'{title}'!A:G"
+        res = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=range_a_g)
+            .execute()
+        )
+        values = res.get("values", [])
+        if not values:
+            complete_job(job_id, [], 0, 0, 0)
+            return
+
+        # Find the header row
+        header_row_idx = find_header_row(values, min_matches=3)
+        headers = (values[header_row_idx] + [""] * 7)[:7]
+        data_rows = values[header_row_idx + 1:]
+
+        # Validate range
+        total_rows = len(data_rows)
+        if start_row >= total_rows:
+            fail_job(job_id, f"start_row ({start_row}) is out of range (max: {total_rows - 1})")
+            return
+
+        # Clamp end_row to available rows
+        end_row_clamped = min(end_row, total_rows - 1)
+        if end_row_clamped < start_row:
+            fail_job(job_id, "Invalid range: end_row is less than start_row after clamping")
+            return
+
+        # Parse column indices
+        column_indices = parse_sheet_columns(headers)
+        company_idx = column_indices["company_idx"]
+        date_idx = column_indices["date_idx"]
+        position_idx = column_indices["position_idx"]
+        job_url_idx = column_indices["job_url_idx"]
+
+        # Initialize statuses array for the entire sheet (needed for job tracking)
+        # But only process the specified range
+        statuses: list[str | None] = [None] * total_rows
+
+        # Track seen URLs so duplicate postings can be marked without re-checking Gmail
+        from threading import Lock
+
+        seen_urls: dict[str, int] = {}
+        seen_urls_lock = Lock()
+
+        def process_row(idx: int, padded_row: list[str]) -> tuple[int, str | None]:
+            company = padded_row[company_idx]
+            applied_date = padded_row[date_idx]
+            position = padded_row[position_idx]
+            job_url = padded_row[job_url_idx]
+
+            # Skip rows missing any required field
+            if not company or not applied_date or not position or not job_url:
+                update_job_progress(job_id, idx, None)
+                return idx, None
+
+            # If this URL has already been processed for this job, mark as duplicate
+            with seen_urls_lock:
+                if job_url in seen_urls:
+                    status_str = "duplicate"
+                    # Mark duplicate in DB and job progress, no Gmail call needed
+                    upsert_application_status(
+                        owner_user_id=current_user_id,
+                        profile_id=profile_id,
+                        spreadsheet_id=spreadsheet_id,
+                        sheet_id=sheet_id,
+                        row_index=idx,
+                        company_name=company,
+                        position=position,
+                        job_url=job_url,
+                        applied_date=applied_date,
+                        status=status_str,
+                    )
+                    update_job_progress(job_id, idx, status_str)
+                    return idx, status_str
+                # First time we've seen this URL; remember it
+                seen_urls[job_url] = idx
+
+            try:
+                applied = search_gmail_for_company(
+                    creds=creds,
+                    company=company,
+                    applied_date=applied_date,
+                    applied_time=None,
+                )
+            except Exception:
+                update_job_progress(job_id, idx, None)
+                return idx, None
+
+            status_str = "applied" if applied else "not_applied"
+
+            upsert_application_status(
+                owner_user_id=current_user_id,
+                profile_id=profile_id,
+                spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_id,
+                row_index=idx,
+                company_name=company,
+                position=position,
+                job_url=job_url,
+                applied_date=applied_date,
+                status=status_str,
+            )
+
+            update_job_progress(job_id, idx, status_str)
+            return idx, status_str
+
+        # Only process rows in the specified range
+        range_rows = data_rows[start_row:end_row_clamped + 1]
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_map = {
+                executor.submit(process_row, start_row + idx, (row + [""] * 7)[:7]): start_row + idx
+                for idx, row in enumerate(range_rows)
+            }
+
+            for future in as_completed(future_map):
+                idx, status = future.result()
+                statuses[idx] = status
+
+        # Count only the processed range
+        range_statuses = statuses[start_row:end_row_clamped + 1]
+        applied_count = sum(1 for s in range_statuses if s == "applied")
+        duplicate_count = sum(1 for s in range_statuses if s == "duplicate")
+        not_applied_count = sum(1 for s in range_statuses if s == "not_applied")
+
+        complete_job(job_id, statuses, applied_count, not_applied_count, duplicate_count)
+
+    # Start background thread
+    thread = Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return success_response({"job_id": job_id}, 202)
+
+
 @profile_bp.get("/<profile_id>/jobs/<job_id>/status")
 @require_auth
 def get_job_status_route(current_user_id: str, profile_id: str, job_id: str):
