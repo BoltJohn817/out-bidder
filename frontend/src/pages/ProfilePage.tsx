@@ -17,11 +17,14 @@ type TechStackCategory =
   | 'devops'
   | 'language';
 
+type EmailProvider = 'gmail' | 'outlook';
+
 interface ProfileForm {
   name: string;
   googleEmail: string;
   spreadsheetId: string;
   techstack: TechStackCategory[];
+  emailProvider: EmailProvider;
 }
 
 interface ProfileApi {
@@ -30,6 +33,7 @@ interface ProfileApi {
   google_email: string;
   spreadsheet_id: string;
   techstack: TechStackCategory[];
+  email_provider?: EmailProvider;
 }
 
 interface Profile extends ProfileForm {
@@ -53,12 +57,14 @@ export const ProfilePage = () => {
     name: '',
     googleEmail: '',
     spreadsheetId: '',
-    techstack: []
+    techstack: [],
+    emailProvider: 'gmail'
   });
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [googleAuthUrl, setGoogleAuthUrl] = useState<string | null>(null);
+  const [outlookAuthUrl, setOutlookAuthUrl] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const { logout } = useAuth();
 
@@ -72,7 +78,8 @@ export const ProfilePage = () => {
         name: p.name,
         googleEmail: p.google_email,
         spreadsheetId: p.spreadsheet_id,
-        techstack: p.techstack
+        techstack: p.techstack,
+        emailProvider: p.email_provider || 'gmail'
       }));
       setProfiles(mapped);
     } catch (err: any) {
@@ -101,9 +108,11 @@ export const ProfilePage = () => {
       name: '',
       googleEmail: '',
       spreadsheetId: '',
-      techstack: []
+      techstack: [],
+      emailProvider: 'gmail'
     });
     setGoogleAuthUrl(null);
+    setOutlookAuthUrl(null);
   };
 
   const handleSaveProfile = () => {
@@ -112,7 +121,8 @@ export const ProfilePage = () => {
       name: form.name,
       google_email: form.googleEmail,
       spreadsheet_id: form.spreadsheetId,
-      techstack: form.techstack
+      techstack: form.techstack,
+      email_provider: form.emailProvider
     };
 
     const request = selectedProfileId
@@ -149,6 +159,30 @@ export const ProfilePage = () => {
       })
       .catch((err) => {
         setError(err?.response?.data?.message ?? 'Failed to start Google auth');
+      });
+  };
+
+  const handleOutlookAuth = () => {
+    setError(null);
+    setOutlookAuthUrl(null);
+    api
+      .post<{ auth_url: string }>('/profiles/outlook/auth-url', {
+        name: form.name,
+        google_email: form.googleEmail,
+        spreadsheet_id: form.spreadsheetId,
+        techstack: form.techstack,
+        email_provider: form.emailProvider,
+        profile_id: selectedProfileId ?? undefined
+      })
+      .then((res) => {
+        if (res.data.auth_url) {
+          setOutlookAuthUrl(res.data.auth_url);
+        } else {
+          setError('Failed to get Outlook auth URL');
+        }
+      })
+      .catch((err) => {
+        setError(err?.response?.data?.message ?? 'Failed to start Outlook auth');
       });
   };
 
@@ -223,12 +257,24 @@ export const ProfilePage = () => {
             )}
           </div>
           <div>
-            <label className="block text-sm mb-1 text-slate-300">Google email</label>
+            <label className="block text-sm mb-1 text-slate-300">Email address</label>
             <input
               className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
               value={form.googleEmail}
               onChange={(e) => setForm({ ...form, googleEmail: e.target.value })}
+              placeholder="your@email.com"
             />
+          </div>
+          <div>
+            <label className="block text-sm mb-1 text-slate-300">Email provider</label>
+            <select
+              className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm"
+              value={form.emailProvider}
+              onChange={(e) => setForm({ ...form, emailProvider: e.target.value as EmailProvider })}
+            >
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook</option>
+            </select>
           </div>
           <div>
             <label className="block text-sm mb-1 text-slate-300">Spreadsheet ID</label>
@@ -266,21 +312,42 @@ export const ProfilePage = () => {
             </div>
 
           </div>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <button
-              type="button"
-              onClick={handleSaveProfile}
-              className="flex-1 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-sm font-medium text-white"
-            >
-              {selectedProfileId ? 'Update Profile' : 'Create Profile'}
-            </button>
-            <button
-              type="button"
-              onClick={handleGoogleAuth}
-              className="flex-1 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white"
-            >
-              {selectedProfileId ? 'Update Google access' : 'Connect Google (Gmail + Sheets)'}
-            </button>
+          <div className="flex flex-col gap-2">
+            {
+              selectedProfileId ? (
+                <button
+                  type="button"
+                  onClick={handleSaveProfile}
+                  className="w-full py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-sm font-medium text-white"
+                >
+                  Update Profile
+                </button>
+              ) : (
+                null
+              )
+            }
+            <div className="flex flex-col sm:flex-row gap-2">
+              {form.emailProvider === 'gmail' ? (
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  className="flex-1 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-sm font-medium text-white"
+                >
+                  {selectedProfileId ? 'Update Gmail access' : 'Connect Gmail'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleOutlookAuth}
+                  className="flex-1 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-sm font-medium text-white"
+                >
+                  {selectedProfileId ? 'Update Outlook access' : 'Connect Outlook'}
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Note: Google Sheets access is required for spreadsheet functionality. {form.emailProvider === 'gmail' ? 'Gmail connection also provides Sheets access.' : 'Outlook is only used for email checking.'}
+            </p>
           </div>
 
           {googleAuthUrl && (
@@ -299,6 +366,31 @@ export const ProfilePage = () => {
                   type="button"
                   onClick={() => {
                     void navigator.clipboard.writeText(googleAuthUrl);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-100"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
+
+          {outlookAuthUrl && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-slate-300">
+                Copy this URL and open it in your browser to complete Outlook authentication:
+              </p>
+              <div className="flex gap-2 items-center">
+                <input
+                  readOnly
+                  value={outlookAuthUrl}
+                  className="flex-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-1 text-[11px]"
+                  onFocus={(e) => e.target.select()}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(outlookAuthUrl);
                   }}
                   className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-100"
                 >
@@ -352,9 +444,11 @@ export const ProfilePage = () => {
                           name: p.name,
                           googleEmail: p.googleEmail,
                           spreadsheetId: p.spreadsheetId,
-                          techstack: p.techstack
+                          techstack: p.techstack,
+                          emailProvider: p.emailProvider
                         });
                         setGoogleAuthUrl(null);
+                        setOutlookAuthUrl(null);
                       }}
                     >
                       {p.name}

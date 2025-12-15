@@ -46,7 +46,9 @@ def create_profile(
     google_email: str,
     spreadsheet_id: str,
     techstack: List[str],
+    email_provider: str = "gmail",
     google_credentials: Dict[str, Any] | None = None,
+    outlook_credentials: Dict[str, Any] | None = None,
 ) -> str:
     doc: Dict[str, Any] = {
         "owner_user_id": owner_user_id,
@@ -54,10 +56,13 @@ def create_profile(
         "google_email": google_email,
         "spreadsheet_id": spreadsheet_id,
         "techstack": techstack,
+        "email_provider": email_provider,
         "created_at": _now(),
     }
     if google_credentials:
         doc["google_credentials"] = google_credentials
+    if outlook_credentials:
+        doc["outlook_credentials"] = outlook_credentials
     res = profiles_collection().insert_one(doc)
     return str(res.inserted_id)
 
@@ -80,6 +85,7 @@ def update_profile(
     google_email: str | None = None,
     spreadsheet_id: str | None = None,
     techstack: List[str] | None = None,
+    email_provider: str | None = None,
 ) -> bool:
     """Update basic profile fields for a given owner/profile."""
     update: Dict[str, Any] = {}
@@ -91,6 +97,8 @@ def update_profile(
         update["spreadsheet_id"] = spreadsheet_id
     if techstack is not None:
         update["techstack"] = techstack
+    if email_provider is not None:
+        update["email_provider"] = email_provider
 
     if not update:
         return False
@@ -141,36 +149,43 @@ def delete_profile(owner_user_id: str, profile_id: str) -> bool:
 
 def create_or_update_profile_from_oauth_state(
     state_payload: Dict[str, Any],
-    google_credentials: Dict[str, Any],
+    google_credentials: Dict[str, Any] | None = None,
+    outlook_credentials: Dict[str, Any] | None = None,
 ) -> str:
     """
-    Helper used by Google OAuth callback to create or update a profile with attached credentials.
+    Helper used by OAuth callback to create or update a profile with attached credentials.
     Expects state_payload to contain keys:
     - owner_user_id
     - name, google_email, spreadsheet_id, techstack (for create or update)
     - profile_id (optional: if provided, update that profile instead of creating)
+    - email_provider (optional: "gmail" or "outlook", defaults to "gmail")
     """
     owner_user_id = state_payload["owner_user_id"]
     name = state_payload["name"]
     google_email = state_payload["google_email"]
     spreadsheet_id = state_payload["spreadsheet_id"]
     techstack = state_payload.get("techstack", [])
+    email_provider = state_payload.get("email_provider", "gmail")
 
     profile_id = state_payload.get("profile_id")
 
     if profile_id:
         # Update existing profile and replace credentials
+        update_data = {
+            "name": name,
+            "google_email": google_email,
+            "spreadsheet_id": spreadsheet_id,
+            "techstack": techstack,
+            "email_provider": email_provider,
+        }
+        if google_credentials:
+            update_data["google_credentials"] = google_credentials
+        if outlook_credentials:
+            update_data["outlook_credentials"] = outlook_credentials
+        
         profiles_collection().update_one(
             {"_id": ObjectId(profile_id), "owner_user_id": owner_user_id},
-            {
-                "$set": {
-                    "name": name,
-                    "google_email": google_email,
-                    "spreadsheet_id": spreadsheet_id,
-                    "techstack": techstack,
-                    "google_credentials": google_credentials,
-                }
-            },
+            {"$set": update_data},
         )
         return str(profile_id)
 
@@ -180,7 +195,9 @@ def create_or_update_profile_from_oauth_state(
         google_email=google_email,
         spreadsheet_id=spreadsheet_id,
         techstack=techstack,
+        email_provider=email_provider,
         google_credentials=google_credentials,
+        outlook_credentials=outlook_credentials,
     )
 
 

@@ -3,6 +3,7 @@ from .google_service import (
     build_gmail_service,
     build_google_credentials,
     build_sheets_service,
+    build_sheets_service_with_api_key,
     get_sheet_title,
 )
 from .object_id_utils import (
@@ -17,6 +18,7 @@ __all__ = [
     "build_gmail_service",
     "build_google_credentials",
     "build_sheets_service",
+    "build_sheets_service_with_api_key",
     "get_sheet_title",
     "convert_objectid_to_str",
     "convert_objectids_in_list",

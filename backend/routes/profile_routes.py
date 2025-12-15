@@ -18,12 +18,16 @@ from models import (
     update_profile,
 )
 from gmail_utils import search_gmail_for_company
+from outlook_utils import search_outlook_for_company
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Thread
+from msal import ConfidentialClientApplication
+import requests
 from utils import (
     build_google_credentials,
     build_sheets_service,
+    build_sheets_service_with_api_key,
     build_gmail_service,
     get_sheet_title,
     find_header_row,
@@ -33,6 +37,7 @@ from utils import (
     success_response,
     validation_error,
 )
+from utils.outlook_service import build_outlook_credentials, get_outlook_user_email
 from utils.job_status_store import create_job, update_job_progress, complete_job, fail_job, get_job_status
 
 profile_bp = Blueprint("profiles", __name__)
@@ -44,10 +49,12 @@ def get_profiles(current_user_id: str):
     profiles = list_profiles(current_user_id)
     # Convert ObjectIds to strings for JSON
     profiles = convert_objectids_in_list(profiles)
-    # Never leak raw Google credentials to the frontend
+    # Never leak raw credentials to the frontend
     for p in profiles:
         if "google_credentials" in p:
             del p["google_credentials"]
+        if "outlook_credentials" in p:
+            del p["outlook_credentials"]
     return success_response({"profiles": profiles})
 
 
@@ -144,6 +151,15 @@ def _build_oauth_flow(redirect_uri: str) -> Flow:
     return flow
 
 
+def _build_microsoft_oauth_app():
+    """Build MSAL ConfidentialClientApplication for Microsoft OAuth."""
+    return ConfidentialClientApplication(
+        client_id=Config.MICROSOFT_CLIENT_ID,
+        client_credential=Config.MICROSOFT_CLIENT_SECRET,
+        authority=Config.MICROSOFT_AUTHORITY,
+    )
+
+
 @profile_bp.post("/google/auth-url")
 @require_auth
 def google_auth_url(current_user_id: str):
@@ -178,6 +194,7 @@ def google_auth_url(current_user_id: str):
         "google_email": google_email,
         "spreadsheet_id": spreadsheet_id,
         "techstack": techstack,
+        "email_provider": "gmail",
     }
     if profile_id:
         state_payload["profile_id"] = profile_id
@@ -272,6 +289,136 @@ def google_callback():
     return redirect(f"{frontend_url}?google_connected=1&profile_id={profile_id}")
 
 
+@profile_bp.post("/outlook/auth-url")
+@require_auth
+def outlook_auth_url(current_user_id: str):
+    """
+    Start Microsoft/Outlook OAuth for a profile.
+    Expects JSON: { name, google_email, spreadsheet_id, techstack[], email_provider }
+    Returns: { auth_url } that the frontend should redirect the user to.
+    """
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    google_email = data.get("google_email")
+    spreadsheet_id = data.get("spreadsheet_id")
+    techstack = data.get("techstack") or []
+    email_provider = data.get("email_provider", "outlook")
+
+    if not name or not google_email or not spreadsheet_id:
+        missing = []
+        if not name:
+            missing.append("name")
+        if not google_email:
+            missing.append("google_email")
+        if not spreadsheet_id:
+            missing.append("spreadsheet_id")
+        return validation_error(missing)
+
+    # Optional: profile_id when refreshing Outlook credentials for an existing profile
+    profile_id = data.get("profile_id")
+
+    # Embed the pending profile data + user id into the OAuth state token
+    state_payload = {
+        "owner_user_id": current_user_id,
+        "name": name,
+        "google_email": google_email,
+        "spreadsheet_id": spreadsheet_id,
+        "techstack": techstack,
+        "email_provider": email_provider,
+    }
+    if profile_id:
+        state_payload["profile_id"] = profile_id
+    
+    state = jwt.encode(
+        state_payload,
+        current_app.config["SECRET_KEY"],
+        algorithm="HS256",
+    )
+
+    app = _build_microsoft_oauth_app()
+    auth_url = app.get_authorization_request_url(
+        scopes=Config.MICROSOFT_SCOPES,
+        state=state,
+        redirect_uri=Config.MICROSOFT_REDIRECT_URI,
+    )
+
+    return success_response({"auth_url": auth_url})
+
+
+@profile_bp.get("/outlook/callback")
+def outlook_callback():
+    """
+    Microsoft/Outlook OAuth callback.
+    - Exchanges code for tokens
+    - Verifies Outlook inbox access
+    - Creates a profile with attached Outlook credentials.
+    Note: Spreadsheet access still requires Google credentials (separate OAuth flow).
+    """
+    error = request.args.get("error")
+    if error:
+        return error_response(f"Microsoft OAuth error: {error}")
+
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code or not state:
+        return error_response("Missing code or state")
+
+    try:
+        state_payload = jwt.decode(
+            state,
+            current_app.config["SECRET_KEY"],
+            algorithms=["HS256"],
+        )
+    except Exception:
+        return error_response("Invalid state parameter")
+
+    app = _build_microsoft_oauth_app()
+    result = app.acquire_token_by_authorization_code(
+        code=code,
+        scopes=Config.MICROSOFT_SCOPES,
+        redirect_uri=Config.MICROSOFT_REDIRECT_URI,
+    )
+
+    if "error" in result:
+        return error_response(f"Microsoft OAuth token error: {result.get('error_description', result.get('error'))}")
+
+    access_token = result.get("access_token")
+    if not access_token:
+        return error_response("Failed to obtain access token from Microsoft")
+
+    # Verify Outlook access: get the user's email address
+    try:
+        email_address = get_outlook_user_email(access_token)
+    except Exception as exc:  # noqa: BLE001
+        return error_response(f"Failed to get Outlook email address: {exc}")
+
+    expected_email = state_payload.get("google_email")
+    if expected_email and email_address and email_address.lower() != expected_email.lower():
+        return error_response(
+            "Authenticated Microsoft account does not match requested email",
+            details={"expected_email": expected_email, "actual_email": email_address}
+        )
+
+    # Persist credentials with the new profile
+    outlook_credentials = {
+        "access_token": access_token,
+        "refresh_token": result.get("refresh_token"),
+        "id_token": result.get("id_token"),
+        "expires_in": result.get("expires_in"),
+        "token_type": result.get("token_type", "Bearer"),
+    }
+
+    profile_id = create_or_update_profile_from_oauth_state(
+        state_payload=state_payload,
+        outlook_credentials=outlook_credentials,
+    )
+
+    # Redirect back to the frontend profile page with a success flag
+    frontend_base = current_app.config.get("FRONTEND_BASE_URL", "http://localhost:5173")
+    frontend_url = frontend_base.rstrip("/") + "/profile"
+    return redirect(f"{frontend_url}?outlook_connected=1&profile_id={profile_id}")
+
+
 
 
 @profile_bp.get("/<profile_id>/sheets")
@@ -282,13 +429,22 @@ def list_sheets(current_user_id: str, profile_id: str):
     if not profile:
         return error_response("Profile not found", 404)
 
+    spreadsheet_id = profile.get("spreadsheet_id")
+    if not spreadsheet_id:
+        return error_response("Profile is missing spreadsheet_id", 400)
+
+    email_provider = profile.get("email_provider", "gmail")
+
+    # For Gmail profiles, use OAuth credentials; for Outlook-only profiles, fall back to API key
     try:
-        creds = build_google_credentials(profile)
+        if email_provider == "outlook" and not profile.get("google_credentials"):
+            api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+            service = build_sheets_service_with_api_key(api_key)
+        else:
+            creds = build_google_credentials(profile)
+            service = build_sheets_service(creds)
     except ValueError as exc:
         return error_response(str(exc))
-
-    spreadsheet_id = profile.get("spreadsheet_id")
-    service = build_sheets_service(creds)
     meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     sheets = meta.get("sheets", [])
 
@@ -314,13 +470,22 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
     if not profile:
         return error_response("Profile not found", 404)
 
+    spreadsheet_id = profile.get("spreadsheet_id")
+    if not spreadsheet_id:
+        return error_response("Profile is missing spreadsheet_id", 400)
+
+    email_provider = profile.get("email_provider", "gmail")
+
+    # For Gmail profiles, use OAuth credentials; for Outlook-only profiles, fall back to API key
     try:
-        creds = build_google_credentials(profile)
+        if email_provider == "outlook" and not profile.get("google_credentials"):
+            api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+            service = build_sheets_service_with_api_key(api_key)
+        else:
+            creds = build_google_credentials(profile)
+            service = build_sheets_service(creds)
     except ValueError as exc:
         return error_response(str(exc))
-
-    spreadsheet_id = profile.get("spreadsheet_id")
-    service = build_sheets_service(creds)
     
     title = get_sheet_title(service, spreadsheet_id, sheet_id)
     if not title:
@@ -394,11 +559,11 @@ def get_sheet_values(current_user_id: str, profile_id: str, sheet_id: int):
     )
 
 
-@profile_bp.post("/<profile_id>/gmail/check-application")
+@profile_bp.post("/<profile_id>/email/check-application")
 @require_auth
-def check_gmail_application(current_user_id: str, profile_id: str):
+def check_email_application(current_user_id: str, profile_id: str):
     """
-    Check if a position appears to be applied based on Gmail messages for the profile's account.
+    Check if a position appears to be applied based on email messages (Gmail or Outlook) for the profile's account.
 
     Body: {
       company_name: string,
@@ -436,20 +601,31 @@ def check_gmail_application(current_user_id: str, profile_id: str):
     if not profile:
         return error_response("Profile not found", 404)
 
-    try:
-        creds = build_google_credentials(profile)
-    except ValueError as exc:
-        return error_response(str(exc))
+    email_provider = profile.get("email_provider", "gmail")
+    applied = False
 
     try:
-        applied = search_gmail_for_company(
-            creds=creds,
-            company=company_name,
-            applied_date=applied_date,
-            applied_time=applied_time,
-        )
+        if email_provider == "outlook":
+            access_token = build_outlook_credentials(profile)
+            applied = search_outlook_for_company(
+                access_token=access_token,
+                company=company_name,
+                applied_date=applied_date,
+                applied_time=applied_time,
+            )
+        else:  # Default to Gmail
+            creds = build_google_credentials(profile)
+            applied = search_gmail_for_company(
+                creds=creds,
+                company=company_name,
+                applied_date=applied_date,
+                applied_time=applied_time,
+            )
+    except ValueError as exc:
+        return error_response(str(exc))
     except Exception as exc:  # noqa: BLE001
-        return error_response(f"Failed to query Gmail: {exc}", 500)
+        provider_name = "Outlook" if email_provider == "outlook" else "Gmail"
+        return error_response(f"Failed to query {provider_name}: {exc}", 500)
 
     # Persist status so subsequent loads can avoid recalculation
     spreadsheet_id = profile.get("spreadsheet_id")
@@ -467,6 +643,14 @@ def check_gmail_application(current_user_id: str, profile_id: str):
     )
 
     return success_response({"applied": applied})
+
+
+# Keep the old route for backward compatibility
+@profile_bp.post("/<profile_id>/gmail/check-application")
+@require_auth
+def check_gmail_application(current_user_id: str, profile_id: str):
+    """Legacy route - redirects to email/check-application."""
+    return check_email_application(current_user_id, profile_id)
 
 
 @profile_bp.post("/<profile_id>/sheets/<int:sheet_id>/gmail/check-all")
@@ -494,13 +678,35 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
     create_job(job_id, current_user_id, profile_id)
 
     def _worker():
+        email_provider = profile.get("email_provider", "gmail")
+        
+        # Build email credentials based on provider
+        if email_provider == "outlook":
+            try:
+                access_token = build_outlook_credentials(profile)
+            except ValueError as exc:
+                fail_job(job_id, str(exc))
+                return
+            creds = None  # Not used for Outlook
+        else:
+            try:
+                creds = build_google_credentials(profile)
+            except ValueError as exc:
+                fail_job(job_id, str(exc))
+                return
+            access_token = None  # Not used for Gmail
+        
+        # Sheets service: use Google OAuth when available; for Outlook-only profiles, fall back to API key
         try:
-            creds = build_google_credentials(profile)
+            if email_provider == "outlook" and not profile.get("google_credentials"):
+                api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+                service = build_sheets_service_with_api_key(api_key)
+            else:
+                google_creds = build_google_credentials(profile)
+                service = build_sheets_service(google_creds)
         except ValueError as exc:
             fail_job(job_id, str(exc))
             return
-
-        service = build_sheets_service(creds)
 
         # Fetch sheet title
         title = get_sheet_title(service, spreadsheet_id, sheet_id)
@@ -535,7 +741,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
         statuses: list[str | None] = [None] * len(data_rows)
 
-        # Track seen URLs so duplicate postings can be marked without re-checking Gmail
+        # Track seen URLs so duplicate postings can be marked without re-checking email
         from threading import Lock
 
         seen_urls: dict[str, int] = {}
@@ -556,7 +762,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             with seen_urls_lock:
                 if job_url in seen_urls:
                     status_str = "duplicate"
-                    # Mark duplicate in DB and job progress, no Gmail call needed
+                    # Mark duplicate in DB and job progress, no email call needed
                     upsert_application_status(
                         owner_user_id=current_user_id,
                         profile_id=profile_id,
@@ -575,12 +781,20 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
                 seen_urls[job_url] = idx
 
             try:
-                applied = search_gmail_for_company(
-                    creds=creds,
-                    company=company,
-                    applied_date=applied_date,
-                    applied_time=None,
-                )
+                if email_provider == "outlook":
+                    applied = search_outlook_for_company(
+                        access_token=access_token,
+                        company=company,
+                        applied_date=applied_date,
+                        applied_time=None,
+                    )
+                else:
+                    applied = search_gmail_for_company(
+                        creds=creds,
+                        company=company,
+                        applied_date=applied_date,
+                        applied_time=None,
+                    )
             except Exception:
                 update_job_progress(job_id, idx, None)
                 return idx, None
@@ -666,13 +880,35 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
     create_job(job_id, current_user_id, profile_id)
 
     def _worker():
+        email_provider = profile.get("email_provider", "gmail")
+        
+        # Build email credentials based on provider
+        if email_provider == "outlook":
+            try:
+                access_token = build_outlook_credentials(profile)
+            except ValueError as exc:
+                fail_job(job_id, str(exc))
+                return
+            creds = None  # Not used for Outlook
+        else:
+            try:
+                creds = build_google_credentials(profile)
+            except ValueError as exc:
+                fail_job(job_id, str(exc))
+                return
+            access_token = None  # Not used for Gmail
+        
+        # Sheets service: use Google OAuth when available; for Outlook-only profiles, fall back to API key
         try:
-            creds = build_google_credentials(profile)
+            if email_provider == "outlook" and not profile.get("google_credentials"):
+                api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+                service = build_sheets_service_with_api_key(api_key)
+            else:
+                google_creds = build_google_credentials(profile)
+                service = build_sheets_service(google_creds)
         except ValueError as exc:
             fail_job(job_id, str(exc))
             return
-
-        service = build_sheets_service(creds)
 
         # Fetch sheet title
         title = get_sheet_title(service, spreadsheet_id, sheet_id)
@@ -721,7 +957,7 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
         # But only process the specified range
         statuses: list[str | None] = [None] * total_rows
 
-        # Track seen URLs so duplicate postings can be marked without re-checking Gmail
+        # Track seen URLs so duplicate postings can be marked without re-checking email
         from threading import Lock
 
         seen_urls: dict[str, int] = {}
@@ -742,7 +978,7 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
             with seen_urls_lock:
                 if job_url in seen_urls:
                     status_str = "duplicate"
-                    # Mark duplicate in DB and job progress, no Gmail call needed
+                    # Mark duplicate in DB and job progress, no email call needed
                     upsert_application_status(
                         owner_user_id=current_user_id,
                         profile_id=profile_id,
@@ -761,12 +997,20 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
                 seen_urls[job_url] = idx
 
             try:
-                applied = search_gmail_for_company(
-                    creds=creds,
-                    company=company,
-                    applied_date=applied_date,
-                    applied_time=None,
-                )
+                if email_provider == "outlook":
+                    applied = search_outlook_for_company(
+                        access_token=access_token,
+                        company=company,
+                        applied_date=applied_date,
+                        applied_time=None,
+                    )
+                else:
+                    applied = search_gmail_for_company(
+                        creds=creds,
+                        company=company,
+                        applied_date=applied_date,
+                        applied_time=None,
+                    )
             except Exception:
                 update_job_progress(job_id, idx, None)
                 return idx, None

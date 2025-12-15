@@ -5,6 +5,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 
+from config import Config
 from extensions import db
 
 
@@ -53,6 +54,13 @@ def build_google_credentials(profile: dict[str, Any]) -> Credentials:
 def build_sheets_service(credentials: Credentials):
     """Build a Google Sheets API service."""
     return build("sheets", "v4", credentials=credentials)
+
+
+def build_sheets_service_with_api_key(api_key: str):
+    """Build a Google Sheets API service using an API key (no OAuth)."""
+    if not api_key:
+        raise ValueError("Google Sheets API key is not configured")
+    return build("sheets", "v4", developerKey=api_key)
 
 
 def build_gmail_service(credentials: Credentials):

@@ -69,7 +69,7 @@ export const SheetManagementPage = () => {
       setCheckingIndex(rowIndex);
       setError(null);
       const res = await api.post<{ applied: boolean }>(
-        `/profiles/${profileId}/gmail/check-application`,
+        `/profiles/${profileId}/email/check-application`,
         {
           company_name: company,
           applied_date: appliedDate,
