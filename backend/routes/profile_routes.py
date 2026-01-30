@@ -739,6 +739,8 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         position_idx = column_indices["position_idx"]
         job_url_idx = column_indices["job_url_idx"]
 
+        # Only allocate statuses array for the rows we'll actually process
+        # This reduces memory usage for large sheets
         statuses: list[str | None] = [None] * len(data_rows)
 
         # Track seen URLs so duplicate postings can be marked without re-checking email
@@ -746,6 +748,13 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
 
         seen_urls: dict[str, int] = {}
         seen_urls_lock = Lock()
+        
+        # Clear large data structures after processing to help GC
+        def cleanup_after_processing():
+            nonlocal values, data_rows, headers
+            values = None
+            data_rows = None
+            headers = None
 
         def process_row(idx: int, padded_row: list[str]) -> tuple[int, str | None]:
             company = padded_row[company_idx]
@@ -817,7 +826,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
             update_job_progress(job_id, idx, status_str)
             return idx, status_str
 
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_map = {
                 executor.submit(process_row, idx, (row + [""] * 7)[:7]): idx
                 for idx, row in enumerate(data_rows)
@@ -832,6 +841,10 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         not_applied_count = sum(1 for s in statuses if s == "not_applied")
 
         complete_job(job_id, statuses, applied_count, not_applied_count, duplicate_count)
+        
+        # Cleanup large data structures
+        cleanup_after_processing()
+        seen_urls.clear()
 
     # Start background thread
     thread = Thread(target=_worker, daemon=True)
@@ -962,6 +975,14 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
 
         seen_urls: dict[str, int] = {}
         seen_urls_lock = Lock()
+        
+        # Clear large data structures after processing to help GC
+        def cleanup_after_processing():
+            nonlocal values, data_rows, headers, range_rows
+            values = None
+            data_rows = None
+            headers = None
+            range_rows = None
 
         def process_row(idx: int, padded_row: list[str]) -> tuple[int, str | None]:
             company = padded_row[company_idx]
@@ -1035,7 +1056,7 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
 
         # Only process rows in the specified range
         range_rows = data_rows[start_row:end_row_clamped + 1]
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_map = {
                 executor.submit(process_row, start_row + idx, (row + [""] * 7)[:7]): start_row + idx
                 for idx, row in enumerate(range_rows)
@@ -1052,6 +1073,11 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
         not_applied_count = sum(1 for s in range_statuses if s == "not_applied")
 
         complete_job(job_id, statuses, applied_count, not_applied_count, duplicate_count)
+        
+        # Cleanup large data structures
+        cleanup_after_processing()
+        seen_urls.clear()
+        range_statuses = None
 
     # Start background thread
     thread = Thread(target=_worker, daemon=True)

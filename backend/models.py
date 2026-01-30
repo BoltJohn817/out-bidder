@@ -281,10 +281,13 @@ def get_application_statuses_for_sheet(
             "sheet_id": sheet_id,
         }
     )
-    for doc in cursor:
-        idx = int(doc.get("row_index", -1))
-        if idx >= 0:
-            statuses[idx] = doc.get("status", "")
+    try:
+        for doc in cursor:
+            idx = int(doc.get("row_index", -1))
+            if idx >= 0:
+                statuses[idx] = doc.get("status", "")
+    finally:
+        cursor.close()
     return statuses
 
 
@@ -485,4 +488,26 @@ def delete_job_status(job_id: str) -> None:
     """Remove a job status from MongoDB (cleanup)."""
     job_statuses_collection().delete_one({"job_id": job_id})
 
+
+def cleanup_old_job_statuses(days_old: int = 7) -> int:
+    """
+    Clean up job statuses older than specified days.
+    Only deletes completed or error jobs to avoid deleting active jobs.
+    
+    Args:
+        days_old: Delete jobs older than this many days (default: 7)
+    
+    Returns:
+        Number of jobs deleted
+    """
+    from datetime import timedelta
+    cutoff_date = _now() - timedelta(days=days_old)
+    
+    result = job_statuses_collection().delete_many(
+        {
+            "status": {"$in": ["completed", "error"]},
+            "updated_at": {"$lt": cutoff_date},
+        }
+    )
+    return result.deleted_count
 

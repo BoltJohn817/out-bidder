@@ -28,6 +28,16 @@ def create_app() -> Flask:
         # Silently fail if indexes already exist or on first run
         pass
 
+    # Cleanup old job statuses on startup to prevent memory accumulation
+    try:
+        from models import cleanup_old_job_statuses
+        deleted_count = cleanup_old_job_statuses(days_old=7)
+        if deleted_count > 0:
+            app.logger.info(f"Cleaned up {deleted_count} old job statuses on startup")
+    except Exception:
+        # Silently fail cleanup on startup - not critical
+        pass
+
     # Blueprints
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(profile_bp, url_prefix="/api/profiles")

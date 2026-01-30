@@ -111,28 +111,32 @@ def search_gmail_for_company(
     Returns True if a matching email is found, False otherwise.
     """
     service = build("gmail", "v1", credentials=creds)
+    try:
+        lowered = company.lower()
+        query = f'from:"{lowered}" OR subject:"{lowered}" OR "{lowered}"'
 
-    lowered = company.lower()
-    query = f'from:"{lowered}" OR subject:"{lowered}" OR "{lowered}"'
+        # Build inclusive date window of ±3 days around the applied date for Gmail query
+        base_date = _parse_applied_date(applied_date)
+        start_date = base_date - timedelta(days=3)
+        end_date = base_date + timedelta(days=3)
+        query += f' after:{start_date.strftime("%Y/%m/%d")} before:{(end_date + timedelta(days=1)).strftime("%Y/%m/%d")}'
 
-    # Build inclusive date window of ±3 days around the applied date for Gmail query
-    base_date = _parse_applied_date(applied_date)
-    start_date = base_date - timedelta(days=3)
-    end_date = base_date + timedelta(days=3)
-    query += f' after:{start_date.strftime("%Y/%m/%d")} before:{(end_date + timedelta(days=1)).strftime("%Y/%m/%d")}'
+        messages = _search_gmail_messages(service, query)
+        if not messages:
+            return False
 
-    messages = _search_gmail_messages(service, query)
-    if not messages:
+        for msg in messages:
+            msg_detail = _get_gmail_message(service, msg["id"])
+            internal_ms = msg_detail.get("internalDate")
+            if not internal_ms:
+                continue
+            if _is_email_within_time_window(internal_ms, applied_date, applied_time):
+                return True
+
         return False
-
-    for msg in messages:
-        msg_detail = _get_gmail_message(service, msg["id"])
-        internal_ms = msg_detail.get("internalDate")
-        if not internal_ms:
-            continue
-        if _is_email_within_time_window(internal_ms, applied_date, applied_time):
-            return True
-
-    return False
+    finally:
+        # Google API service objects don't have explicit close(), but we can help GC
+        # by clearing the reference
+        del service
 
 

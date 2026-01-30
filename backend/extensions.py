@@ -29,7 +29,14 @@ class JWTManager:
 jwt_manager = JWTManager()
 
 print(f"Connected to MongoDB: {Config.MONGODB_URI}")
-mongo_client = MongoClient(Config.MONGODB_URI)
+# Configure MongoDB connection with proper pooling and limits to prevent memory issues
+mongo_client = MongoClient(
+    Config.MONGODB_URI,
+    maxPoolSize=10,  # Limit connection pool size
+    minPoolSize=1,
+    maxIdleTimeMS=45000,  # Close idle connections after 45 seconds
+    serverSelectionTimeoutMS=5000,
+)
 db = mongo_client.get_default_database()
 
 
