@@ -46,8 +46,9 @@ def create_app() -> Flask:
     return app
 
 
-# Create application instance for gunicorn
-application = create_app()
+# Vercel looks for a variable named `app`; gunicorn traditionally uses `application`.
+app = create_app()
+application = app  # alias kept for gunicorn compatibility
 
 if __name__ == "__main__":
     application.run(host="0.0.0.0", port=5001, debug=True)

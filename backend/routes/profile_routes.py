@@ -21,7 +21,6 @@ from gmail_utils import search_gmail_for_company
 from outlook_utils import search_outlook_for_company
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Thread
 from msal import ConfidentialClientApplication
 import requests
 from utils import (
@@ -699,7 +698,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         # Sheets service: use Google OAuth when available; for Outlook-only profiles, fall back to API key
         try:
             if email_provider == "outlook" and not profile.get("google_credentials"):
-                api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+                api_key = Config.GOOGLE_SHEETS_API_KEY
                 service = build_sheets_service_with_api_key(api_key)
             else:
                 google_creds = build_google_credentials(profile)
@@ -724,7 +723,7 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         )
         values = res.get("values", [])
         if not values:
-            complete_job(job_id, [], 0, 0)
+            complete_job(job_id, [], 0, 0, 0)
             return
 
         # Find the header row
@@ -846,9 +845,8 @@ def check_gmail_applications_for_sheet(current_user_id: str, profile_id: str, sh
         cleanup_after_processing()
         seen_urls.clear()
 
-    # Start background thread
-    thread = Thread(target=_worker, daemon=True)
-    thread.start()
+    # Run synchronously (serverless-compatible: threads are killed after response)
+    _worker()
 
     return success_response({"job_id": job_id}, 202)
 
@@ -914,7 +912,7 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
         # Sheets service: use Google OAuth when available; for Outlook-only profiles, fall back to API key
         try:
             if email_provider == "outlook" and not profile.get("google_credentials"):
-                api_key = current_app.config.get("GOOGLE_SHEETS_API_KEY", "")
+                api_key = Config.GOOGLE_SHEETS_API_KEY
                 service = build_sheets_service_with_api_key(api_key)
             else:
                 google_creds = build_google_credentials(profile)
@@ -1079,9 +1077,8 @@ def check_gmail_applications_for_range(current_user_id: str, profile_id: str, sh
         seen_urls.clear()
         range_statuses = None
 
-    # Start background thread
-    thread = Thread(target=_worker, daemon=True)
-    thread.start()
+    # Run synchronously (serverless-compatible: threads are killed after response)
+    _worker()
 
     return success_response({"job_id": job_id}, 202)
 

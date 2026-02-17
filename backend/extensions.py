@@ -28,13 +28,12 @@ class JWTManager:
 
 jwt_manager = JWTManager()
 
-print(f"Connected to MongoDB: {Config.MONGODB_URI}")
-# Configure MongoDB connection with proper pooling and limits to prevent memory issues
+# Configure MongoDB connection with serverless-friendly pooling
 mongo_client = MongoClient(
     Config.MONGODB_URI,
-    maxPoolSize=10,  # Limit connection pool size
-    minPoolSize=1,
-    maxIdleTimeMS=45000,  # Close idle connections after 45 seconds
+    maxPoolSize=3,       # Each serverless instance handles ~1 request at a time
+    minPoolSize=0,       # Allow all connections to close when idle
+    maxIdleTimeMS=10000, # Close idle connections after 10 seconds
     serverSelectionTimeoutMS=5000,
 )
 db = mongo_client.get_default_database()
